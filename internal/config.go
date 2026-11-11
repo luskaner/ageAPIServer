@@ -82,6 +82,13 @@ type Auth struct {
 	RequireForReadOnly bool
 }
 
+// Storage holds where Publish writes the uploaded files.
+type Storage struct {
+	// UploadDir is the directory for mod archives and screenshots. Empty
+	// rejects any publish that carries a file.
+	UploadDir string
+}
+
 // Config is the process configuration, loaded from TOML, environment and flags.
 type Config struct {
 	Server     Server
@@ -91,6 +98,7 @@ type Config struct {
 	CORS       CORS
 	Pagination Pagination
 	Auth       Auth
+	Storage    Storage
 }
 
 // DefaultConfig returns the values used when neither the file nor the
@@ -131,6 +139,9 @@ func DefaultConfig() Config {
 		},
 		Auth: Auth{
 			RequireForReadOnly: false,
+		},
+		Storage: Storage{
+			UploadDir: "uploads",
 		},
 	}
 }

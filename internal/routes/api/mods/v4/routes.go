@@ -39,6 +39,9 @@ func Register(group *router.Group, deps shared.Deps) {
 	base.Handle("GET", "/unsubscribe/{modid}", router.Chain(Unsubscribe(deps), auth.Required()))
 	base.Handle("POST", "/rate", router.Chain(Rate(deps), auth.Required()))
 	base.Handle("GET", "/download/{modid}", router.Chain(Download(deps), auth.Required()))
+	base.Handle("POST", "/publish", router.Chain(Publish(deps), auth.Required()))
+	base.Handle("POST", "/delete", router.Chain(Delete(deps), auth.Required()))
+	base.Handle("POST", "/report", router.Chain(Report(deps), auth.Required()))
 }
 
 // modIDFromPath parses the {modid} path value.

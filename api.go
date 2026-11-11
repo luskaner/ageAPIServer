@@ -43,6 +43,9 @@ type Config struct {
 	// RequireAuthForReadOnly makes the endpoints the spec declares anonymous
 	// reject requests without credentials. The default keeps the spec.
 	RequireAuthForReadOnly bool
+	// UploadDir is where Publish stores the mod file and its images. Empty
+	// rejects any publish that carries a file.
+	UploadDir string
 }
 
 // CORSConfig is the browser access policy.
@@ -126,6 +129,7 @@ func New(cfg Config) (*Server, error) {
 		SessionTTL:             sessionTTL,
 		CookieName:             cookieName,
 		RequireAuthForReadOnly: cfg.RequireAuthForReadOnly,
+		UploadDir:              cfg.UploadDir,
 	}
 
 	group := router.New()
@@ -194,6 +198,9 @@ var routeInventory = []Route{
 	{Method: "GET", Path: "/api/v4/mods/unsubscribe/{modid}", SpecPath: "/api/v4/Mods/Unsubscribe/{modId}", AuthRequired: true},
 	{Method: "POST", Path: "/api/v4/mods/rate", SpecPath: "/api/v4/Mods/Rate/", AuthRequired: true},
 	{Method: "GET", Path: "/api/v4/mods/download/{modid}", SpecPath: "/api/v4/Mods/Download/{modId}/", AuthRequired: true},
+	{Method: "POST", Path: "/api/v4/mods/publish", SpecPath: "/api/v4/mods/Publish", AuthRequired: true},
+	{Method: "POST", Path: "/api/v4/mods/delete", SpecPath: "/api/v4/mods/Delete", AuthRequired: true},
+	{Method: "POST", Path: "/api/v4/mods/report", SpecPath: "/api/v4/mods/Report", AuthRequired: true},
 	{Method: "POST", Path: "/api/v1/mods/detail", SpecPath: "/api/v1/Mods/Detail/", AuthRequired: true},
 	{Method: "POST", Path: "/api/v1/mods/findasuser", SpecPath: "/api/v1/Mods/FindAsUser/", AuthRequired: true},
 	{Method: "POST", Path: "/api/v1/mods/installed", SpecPath: "/api/v1/Mods/Installed/", AuthRequired: true},

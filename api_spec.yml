@@ -1491,6 +1491,186 @@ paths:
           description: Mod not found
         '500':
           description: Internal server error
+  # Delete a mod
+  /api/v4/mods/Delete:
+    post:
+      tags:
+        - Mods
+      summary: Delete a mod
+      description: |
+        Removes a mod and everything that hangs off it (tags, images, reviews,
+        ratings, installs, reports). Only the creator of the mod may delete it.
+      operationId: deleteMod
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - modId
+              properties:
+                modId:
+                  type: integer
+                  description: Mod ID as a number, unlike Report
+      responses:
+        '200':
+          description: The mod was deleted
+          content:
+            application/json:
+              schema:
+                type: boolean
+                example: true
+        '400':
+          description: Bad request
+        '401':
+          description: Unauthorized, or the caller is not the creator
+        '404':
+          description: Mod not found
+        '500':
+          description: Internal server error
+
+  # Report a mod
+  /api/v4/mods/Report:
+    post:
+      tags:
+        - Mods
+      summary: Report a mod
+      description: Records a concern about a mod. Every field is a string.
+      operationId: reportMod
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - modId
+                - concernCategoryId
+                - concernCategoryName
+              properties:
+                modId:
+                  type: string
+                  description: Mod ID as a string, unlike Delete
+                concernCategoryId:
+                  type: string
+                concernCategoryName:
+                  type: string
+                concernContent:
+                  type: string
+      responses:
+        '200':
+          description: The report was recorded
+          content:
+            application/json:
+              schema:
+                type: boolean
+                example: true
+        '400':
+          description: Bad request
+        '401':
+          description: Unauthorized
+        '404':
+          description: Mod not found
+        '500':
+          description: Internal server error
+
+  # Publish a mod
+  /api/v4/mods/Publish:
+    post:
+      tags:
+        - Mods
+      summary: Publish or update a mod
+      description: |
+        Creates a mod when modId is absent and updates it when modId is present.
+        The body is multipart/form-data because it carries the archive and the
+        screenshots. modStatusId is derived from modVisibility: Public is 1,
+        Unlisted is 3 and Private is 4.
+      operationId: publishMod
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - gameTitleId
+                - modName
+              properties:
+                modId:
+                  type: integer
+                  description: Present only when updating an existing mod
+                gameTitleId:
+                  type: integer
+                modType:
+                  type: integer
+                  description: Mod type id, validated against the tags of the game
+                modName:
+                  type: string
+                description:
+                  type: string
+                changeList:
+                  type: string
+                modVisibility:
+                  type: string
+                  enum: [Public, Private, Unlisted]
+                  default: Public
+                modDiscussion:
+                  type: boolean
+                  default: false
+                modTags:
+                  type: array
+                  description: Repeated field or one comma-separated value
+                  items:
+                    type: integer
+                ImageMetaData:
+                  type: string
+                  description: |
+                    JSON array of {imageId, displayIndex, imageName,
+                    imageThumbnail}. An entry is paired with the modImages part
+                    of the same file name; an entry without an upload keeps the
+                    thumbnail the client sent.
+                modImages:
+                  type: array
+                  items:
+                    type: string
+                    format: binary
+                modFiles:
+                  type: string
+                  format: binary
+      responses:
+        '200':
+          description: The mod was stored
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  errorCode:
+                    type: integer
+                    example: 0
+                  errorMessage:
+                    type: string
+                    example: "0"
+                  resultKey:
+                    type: string
+                    example: ModId
+                  resultValue:
+                    type: string
+                    description: The id of the created or updated mod
+                    example: "583325"
+                  resultJson:
+                    type: string
+                    nullable: true
+        '400':
+          description: Bad request, including an unknown tag for the game
+        '401':
+          description: Unauthorized, or the caller is not the creator
+        '404':
+          description: Mod not found
+        '500':
+          description: Internal server error
+
   # My mods (v4)
   /api/v4/Mods/My/:
     post:

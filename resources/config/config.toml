@@ -46,3 +46,8 @@ MaxCount = 20000
 # answered 401 on all of them except Games and Tags; set this to true to match
 # that behaviour once it is confirmed.
 RequireForReadOnly = false
+
+[Storage]
+# Where Publish writes the mod archive and its screenshots. Empty rejects any
+# publish that carries a file.
+UploadDir = "uploads"

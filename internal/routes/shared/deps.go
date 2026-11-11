@@ -19,4 +19,7 @@ type Deps struct {
 	// RequireAuthForReadOnly turns the endpoints the spec declares anonymous
 	// into authenticated ones.
 	RequireAuthForReadOnly bool
+	// UploadDir is where Publish stores the mod file and its images. Empty
+	// rejects any request that carries a file.
+	UploadDir string
 }

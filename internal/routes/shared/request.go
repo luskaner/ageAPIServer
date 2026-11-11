@@ -82,6 +82,20 @@ type TextModerationRequest struct {
 	IncludeResponse bool   `json:"includeResponse"`
 }
 
+// DeleteRequest is the body of Delete. modId is a number here, unlike Report.
+type DeleteRequest struct {
+	ModID int64 `json:"modId"`
+}
+
+// ReportRequest is the body of Report. Every field is a string in the capture,
+// including modId.
+type ReportRequest struct {
+	ModID               string `json:"modId"`
+	ConcernCategoryID   string `json:"concernCategoryId"`
+	ConcernCategoryName string `json:"concernCategoryName"`
+	ConcernContent      string `json:"concernContent"`
+}
+
 // FilterDefaults carries the per-endpoint schema defaults.
 type FilterDefaults struct {
 	Sort  string
@@ -276,6 +290,26 @@ func (r TextModerationRequest) Validate() error {
 	case "SanitisationUsername", "SanitisationInput":
 	default:
 		return errors.New("textType must be SanitisationUsername or SanitisationInput")
+	}
+	return nil
+}
+
+// Validate rejects a delete without modId.
+func (r DeleteRequest) Validate() error {
+	if r.ModID <= 0 {
+		return errors.New("modId is required")
+	}
+	return nil
+}
+
+// Validate rejects a report without a category. The modId is parsed by the
+// handler, which is the only place that needs its numeric value.
+func (r ReportRequest) Validate() error {
+	if r.ConcernCategoryID == "" {
+		return errors.New("concernCategoryId is required")
+	}
+	if r.ConcernCategoryName == "" {
+		return errors.New("concernCategoryName is required")
 	}
 	return nil
 }

@@ -10,7 +10,7 @@ import (
 // schemaVersion is bumped whenever schemaSQL changes. Migrate applies the whole
 // script with CREATE TABLE IF NOT EXISTS, so an existing database only gains
 // the missing objects; a change to an existing table needs the file recreated.
-const schemaVersion = 2
+const schemaVersion = 3
 
 // SystemStore owns the schema and the health check.
 type SystemStore struct {
@@ -181,6 +181,17 @@ CREATE TABLE IF NOT EXISTS flags (
   createdAt  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
 );
 CREATE INDEX IF NOT EXISTS idx_flags_mod ON flags(modId);
+
+CREATE TABLE IF NOT EXISTS mod_reports (
+  reportId            INTEGER PRIMARY KEY AUTOINCREMENT,
+  modId               INTEGER NOT NULL REFERENCES mods(modId) ON DELETE CASCADE,
+  userId              INTEGER NOT NULL REFERENCES users(userId),
+  concernCategoryId   TEXT NOT NULL,
+  concernCategoryName TEXT NOT NULL,
+  concernContent      TEXT NOT NULL DEFAULT '',
+  createdAt           TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_mod_reports_mod ON mod_reports(modId);
 
 CREATE TABLE IF NOT EXISTS polls (
   pollId          TEXT PRIMARY KEY,

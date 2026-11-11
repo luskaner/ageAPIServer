@@ -15,5 +15,8 @@ ageapiserver.exe
 *.test
 /dist/
 
+# Uploads of Publish
+/uploads/
+
 # Local implementation plan (kept out of the repository on purpose)
 ageAPIServer-implementation.md

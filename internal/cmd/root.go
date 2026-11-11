@@ -48,6 +48,7 @@ func Execute() (error, int) {
 	fs.String("pagination.base", "", "page or offset")
 	fs.Int("pagination.defaultCount", 0, "default page size")
 	fs.Int("pagination.maxCount", 0, "maximum page size")
+	fs.String("storage.uploaddir", "", "directory for published mod files")
 	fs.String("new-session", "", "print a session cookie value for a Steam token and exit")
 
 	if err := fs.Parse(os.Args[1:]); err != nil {
@@ -106,6 +107,7 @@ func runRoot(fs *pflag.FlagSet) (error, int) {
 			MaxCount:     cfg.Pagination.MaxCount,
 		},
 		RequireAuthForReadOnly: cfg.Auth.RequireForReadOnly,
+		UploadDir:              cfg.Storage.UploadDir,
 	})
 	if err != nil {
 		return fmt.Errorf("build server: %w", err), i.ErrDatabase

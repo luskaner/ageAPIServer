@@ -1079,6 +1079,68 @@ func (s *ModStore) Flag(ctx context.Context, userID int64, modID int64, reason s
 	return nil
 }
 
+// ReportInput is the resolved body of Report.
+type ReportInput struct {
+	ModID               int64
+	ConcernCategoryID   string
+	ConcernCategoryName string
+	ConcernContent      string
+}
+
+// Report records a concern about a mod. The category is free text: the capture
+// sends both an id and a name, and neither is an enum the server can check.
+func (s *ModStore) Report(ctx context.Context, userID int64, input ReportInput) error {
+	if userID <= 0 {
+		return ErrUnauthorized
+	}
+	if input.ModID <= 0 || input.ConcernCategoryID == "" || input.ConcernCategoryName == "" {
+		return ErrValidation
+	}
+	var exists int
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM mods WHERE modId = ?`, input.ModID).Scan(&exists); err != nil {
+		return fmt.Errorf("check mod: %w", err)
+	}
+	if exists == 0 {
+		return ErrNotFound
+	}
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO mod_reports (modId, userId, concernCategoryId, concernCategoryName, concernContent)
+		 VALUES (?, ?, ?, ?, ?)`,
+		input.ModID, userID, input.ConcernCategoryID, input.ConcernCategoryName, input.ConcernContent)
+	if err != nil {
+		return fmt.Errorf("insert mod report: %w", err)
+	}
+	return nil
+}
+
+// Delete removes a mod and everything that hangs off it. Every child table
+// declares ON DELETE CASCADE, so one statement is enough. Only the creator may
+// delete a mod.
+func (s *ModStore) Delete(ctx context.Context, userID int64, modID int64) error {
+	if userID <= 0 {
+		return ErrUnauthorized
+	}
+	if modID <= 0 {
+		return ErrValidation
+	}
+	var creatorID sql.NullInt64
+	err := s.db.QueryRowContext(ctx, `SELECT creatorId FROM mods WHERE modId = ?`, modID).Scan(&creatorID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("read mod creator: %w", err)
+	}
+	if !creatorID.Valid || creatorID.Int64 != userID {
+		return ErrUnauthorized
+	}
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM mods WHERE modId = ?`, modID); err != nil {
+		return fmt.Errorf("delete mod: %w", err)
+	}
+	return nil
+}
+
 // Reviews returns one page of reviews and the total count.
 func (s *ModStore) Reviews(ctx context.Context, modID int64, page int, count int, ratingNum int64) ([]Review, int64, error) {
 	if page < 1 {
@@ -1185,6 +1247,184 @@ type ModInput struct {
 	ModFileSize      float64
 	MetaData         string
 	TagIDs           []int64
+}
+
+// PublishImage is one image of a Publish request.
+type PublishImage struct {
+	DisplayIndex int64
+	ImageName    string
+	Thumbnail    string
+	FileSize     float64
+}
+
+// PublishInput is the resolved multipart body of Publish.
+type PublishInput struct {
+	// ModID is 0 to create a mod and the existing id to update it.
+	ModID         int64
+	GameTitleID   int64
+	ModName       string
+	Description   string
+	ChangeList    string
+	ModVisibility string
+	ModTypeID     int64
+	ModDiscussion bool
+	TagIDs        []int64
+	CreatorID     int64
+	Images        []PublishImage
+	FileURL       string
+	FileCRC       string
+	FileSize      float64
+}
+
+// Publish creates or updates a mod and returns its id. The status follows the
+// visibility, which is the only signal the request carries: Public is
+// Published, Unlisted is Unlisted and Private is Draft.
+func (s *ModStore) Publish(ctx context.Context, input PublishInput) (int64, error) {
+	if input.CreatorID <= 0 {
+		return 0, ErrUnauthorized
+	}
+	if input.GameTitleID <= 0 || strings.TrimSpace(input.ModName) == "" {
+		return 0, ErrValidation
+	}
+	visibility := input.ModVisibility
+	if visibility == "" {
+		visibility = "Public"
+	}
+	status, ok := statusForVisibility(visibility)
+	if !ok {
+		return 0, ErrValidation
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("begin publish: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	modID := input.ModID
+	if modID > 0 {
+		var creatorID sql.NullInt64
+		err := tx.QueryRowContext(ctx, `SELECT creatorId FROM mods WHERE modId = ?`, modID).Scan(&creatorID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, ErrNotFound
+		}
+		if err != nil {
+			return 0, fmt.Errorf("read mod creator: %w", err)
+		}
+		if !creatorID.Valid || creatorID.Int64 != input.CreatorID {
+			return 0, ErrUnauthorized
+		}
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE mods SET gameTitleId = ?, modName = ?, description = ?, changeList = ?,
+			                modVisibility = ?, modStatusId = ?, modTypeId = ?, allowDiscussion = ?,
+			                lastUpdate = ?
+			WHERE modId = ?`,
+			input.GameTitleID, input.ModName, input.Description, input.ChangeList,
+			visibility, status, nullableID(input.ModTypeID), BoolToNumber(input.ModDiscussion),
+			now, modID); err != nil {
+			return 0, fmt.Errorf("update mod: %w", err)
+		}
+	} else {
+		result, err := tx.ExecContext(ctx, `
+			INSERT INTO mods (gameTitleId, modName, description, changeList, modVisibility,
+			                  modStatusId, modTypeId, allowDiscussion, creatorId, createDate, lastUpdate)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			input.GameTitleID, input.ModName, input.Description, input.ChangeList, visibility,
+			status, nullableID(input.ModTypeID), BoolToNumber(input.ModDiscussion),
+			input.CreatorID, now, now)
+		if err != nil {
+			return 0, fmt.Errorf("insert mod: %w", err)
+		}
+		modID, err = result.LastInsertId()
+		if err != nil {
+			return 0, fmt.Errorf("read new mod id: %w", err)
+		}
+	}
+
+	if input.FileURL != "" {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE mods SET fileUrl = ?, fileCRC = ?, modFileSize = ? WHERE modId = ?`,
+			input.FileURL, input.FileCRC, input.FileSize, modID); err != nil {
+			return 0, fmt.Errorf("attach mod file: %w", err)
+		}
+	}
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM mod_tag_map WHERE modId = ?`, modID); err != nil {
+		return 0, fmt.Errorf("clear mod tags: %w", err)
+	}
+	for _, tagID := range uniqueIDs(input.TagIDs) {
+		var exists int
+		if err := tx.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM mod_types WHERE gameTitleId = ? AND modTypeId = ?`,
+			input.GameTitleID, tagID).Scan(&exists); err != nil {
+			return 0, fmt.Errorf("check mod tag: %w", err)
+		}
+		if exists == 0 {
+			return 0, ErrValidation
+		}
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO mod_tag_map (modId, gameTitleId, modTypeId) VALUES (?, ?, ?)`,
+			modID, input.GameTitleID, tagID); err != nil {
+			return 0, fmt.Errorf("insert mod tag: %w", err)
+		}
+	}
+
+	if len(input.Images) > 0 {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM mod_images WHERE modId = ?`, modID); err != nil {
+			return 0, fmt.Errorf("clear mod images: %w", err)
+		}
+		for _, image := range input.Images {
+			if _, err := tx.ExecContext(ctx, `
+				INSERT INTO mod_images (imageId, modId, displayIndex, imageName, imageThumbnail, imageFileSize)
+				VALUES (?, ?, ?, ?, ?, ?)`,
+				fmt.Sprintf("%d-%d", modID, image.DisplayIndex), modID, image.DisplayIndex,
+				image.ImageName, image.Thumbnail, image.FileSize); err != nil {
+				return 0, fmt.Errorf("insert mod image: %w", err)
+			}
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit publish: %w", err)
+	}
+	return modID, nil
+}
+
+// statusForVisibility maps the visibility of a Publish request to a mod status.
+func statusForVisibility(visibility string) (int64, bool) {
+	switch visibility {
+	case "Public":
+		return 1, true
+	case "Unlisted":
+		return 3, true
+	case "Private":
+		return 4, true
+	default:
+		return 0, false
+	}
+}
+
+// nullableID turns a zero id into NULL, so an optional reference stays unset.
+func nullableID(id int64) any {
+	if id <= 0 {
+		return nil
+	}
+	return id
+}
+
+// uniqueIDs drops the non-positive and repeated ids of a request.
+func uniqueIDs(ids []int64) []int64 {
+	seen := make(map[int64]bool, len(ids))
+	out := make([]int64, 0, len(ids))
+	for _, id := range ids {
+		if id <= 0 || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	return out
 }
 
 // Upsert inserts or replaces a mod and its tags.

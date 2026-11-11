@@ -57,6 +57,7 @@ same session, and the website sends `/api/v4/mods/UnSubscribe/...`.
 |---|---|---|
 | v4 read-only | `Games`, `Tags`, `Featured`, `Find`, `Detail`, `Related`, `Reviews` | anonymous |
 | v4 user | `Installed`, `My`, `Subscribe`, `Unsubscribe`, `Rate`, `Download` | required |
+| v4 write | `Publish`, `Delete`, `Report` | required |
 | v1 legacy | `Detail`, `FindAsUser`, `Installed`, `My`, `Flag`, `Install`, `Uninstall` | required |
 | Polls | `/Poll/list`, `/Poll/{pollId}` | required |
 | Moderation | `/textmoderation` | required |
@@ -84,6 +85,26 @@ this to the internet without a real check.
 - **Logs**: `Authorization` and `Cookie` are redacted in one place
   (`internal/logger/redact.go`); the access log carries only method, path,
   status and duration.
+- **Publish** takes `multipart/form-data` and answers
+  `{"errorCode":0,"errorMessage":"0","resultKey":"ModId","resultValue":"<id>"}`.
+  `modId` present means update, absent means create; both are creator-only.
+  `modStatusId` is derived from `modVisibility` (Public 1, Unlisted 3, Private
+  4), which is an assumption: no capture shows the two fields together.
+  `modTags` is accepted as repeated fields or as one comma-separated value, and
+  every tag is checked against `mod_types` for the game, so an unknown tag is a
+  400 rather than a foreign-key error. `ImageMetaData` entries are paired with
+  the `modImages` parts by file name; an entry without an upload keeps the
+  thumbnail the client sent, which is how an update reuses an existing image.
+- **Uploads**: `Publish` stores the archive and the screenshots under
+  `[Storage] UploadDir` (default `uploads`). The stored name is the CRC32 of the
+  content plus the original extension, so uploading the same bytes twice does
+  not duplicate the file. An empty `UploadDir` rejects any publish that carries
+  a file with a 500.
+- **Delete** removes the mod and, through `ON DELETE CASCADE`, its tags, images,
+  reviews, ratings, installs and reports. Only the creator may delete, and a mod
+  without a creator cannot be deleted by anyone.
+- **Report** stores the concern in `mod_reports` and answers the bare `true`.
+  Every field is a string in the capture, including `modId`, unlike `Delete`.
 
 ## Layout
 
@@ -102,6 +123,7 @@ internal/routes/api/mods/v1/   one file per /api/v1/mods endpoint
 internal/routes/poll/          /poll endpoints
 internal/routes/textmoderation/  /textmoderation endpoint
 testdata/tags.json         verbatim GET /api/v4/mods/Tags, used as a golden
+uploads/                   default UploadDir of Publish (gitignored)
 ```
 
 The `internal/routes` tree mirrors the URL: `/api/v4/mods/Games` is served by
@@ -165,5 +187,10 @@ go test -race ./...
 
 Coverage includes path normalization, CORS preflight, credential redaction,
 pagination and sentinel rules, the store queries (including the
-`MaxOpenConns(1)` deadlock regression), the full authenticated HTTP flow and the
-all-routes inventory.
+`MaxOpenConns(1)` deadlock regression), the full authenticated HTTP flow, the
+multipart parsing and upload storage of `Publish`, the creator-only rules of
+`Publish` and `Delete`, and the all-routes inventory.
+
+The three write handlers and their helpers are at 100% statement coverage. The
+global figure is lower because the read-only handlers are exercised through the
+HTTP layer while their store helpers keep unreachable error branches.
