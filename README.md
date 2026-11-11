@@ -101,6 +101,7 @@ internal/routes/api/mods/v4/   one file per /api/v4/mods endpoint
 internal/routes/api/mods/v1/   one file per /api/v1/mods endpoint
 internal/routes/poll/          /poll endpoints
 internal/routes/textmoderation/  /textmoderation endpoint
+testdata/tags.json         verbatim GET /api/v4/mods/Tags, used as a golden
 ```
 
 The `internal/routes` tree mirrors the URL: `/api/v4/mods/Games` is served by
@@ -120,13 +121,23 @@ exceptions, because they are infrastructure rather than endpoints.
 3. **`reviews.reviewerId` stays a string** as the spec declares, so `userReview`
    is resolved through the viewer's Steam id. A cookie-only session has no
    Steam id and therefore no `userReview`.
-4. **Tag catalog.** The catalog is per game, not shared: a live
-   `GET /api/v4/mods/Tags` returns a different list for every title. Games 1, 2
-   and 4 are transcribed from that call; games 3 and 1001 were never captured
-   and keep a placeholder with stable ids.
+4. **Tag catalog.** `mod_types` is seeded with the exact body of a live
+   `GET /api/v4/mods/Tags`: 56 rows over 22 distinct `modTypeId` values. The id
+   is global, not per game, so the same id carries different names in different
+   titles (1 is "Single-player scenarios" in game 1 and "Crafted Map" in game
+   4). The table is therefore keyed on `(gameTitleId, modTypeId)`, and `mods`
+   and `mod_tag_map` reference that pair. `testdata/tags.json` holds the
+   upstream body and the test compares against it byte for byte.
 5. **`modStatusId` mapping** (1 Published, 2 Featured, 3 Unlisted, 4 Draft) is a
    working assumption, kept as a Go constant so it can be corrected without a
    migration.
+
+## Database compatibility
+
+`schemaVersion` is 2. `Migrate` only creates missing objects, so a database
+created with the previous single-column `mod_types` key is not upgraded: the
+seed detects the partial catalog and refuses to start, asking for the file to be
+deleted. There is no data to preserve in a fresh deployment.
 
 ## Open question: anonymous read-only endpoints
 

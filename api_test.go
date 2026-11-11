@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -46,10 +47,10 @@ func seed(t *testing.T, path string) {
 		t.Fatalf("seed user: %v", err)
 	}
 	mods := []models.ModInput{
-		{ModID: 100, GameTitleID: 2, ModName: "Chieftains", ModVersion: 1.2, ModTypeID: 1,
-			ModStatusID: 1, CreatorID: user.UserID, Popular: 50, Downloads: 10, TagIDs: []int64{1, 2}},
-		{ModID: 200, GameTitleID: 2, ModName: "Balance", ModVersion: 2.0, ModTypeID: 2,
-			ModStatusID: 2, CreatorID: user.UserID, Popular: 90, Downloads: 40, TagIDs: []int64{2}},
+		{ModID: 100, GameTitleID: 2, ModName: "Chieftains", ModVersion: 1.2, ModTypeID: 15,
+			ModStatusID: 1, CreatorID: user.UserID, Popular: 50, Downloads: 10, TagIDs: []int64{15, 16}},
+		{ModID: 200, GameTitleID: 2, ModName: "Balance", ModVersion: 2.0, ModTypeID: 16,
+			ModStatusID: 2, CreatorID: user.UserID, Popular: 90, Downloads: 40, TagIDs: []int64{16}},
 	}
 	for _, mod := range mods {
 		if err := stores.Mods.Upsert(ctx, mod); err != nil {
@@ -364,46 +365,24 @@ func TestGamesMatchesUpstreamPayload(t *testing.T) {
 	}
 }
 
-// TestTagsArePerGame checks that the catalog is not shared across titles: the
-// upstream returns a different list for every game.
-func TestTagsArePerGame(t *testing.T) {
+// TestTagsMatchesUpstreamCatalog compares the endpoint against the verbatim
+// body of a live GET /api/v4/mods/Tags, kept in testdata. The comparison is
+// byte for byte, so it pins the row order as well as the values.
+func TestTagsMatchesUpstreamCatalog(t *testing.T) {
+	golden, err := os.ReadFile(filepath.Join("testdata", "tags.json"))
+	if err != nil {
+		t.Fatalf("read golden: %v", err)
+	}
+
 	server, _ := newTestServer(t)
 	recorder := do(t, server.Handler(), http.MethodGet, "/api/v4/mods/Tags", "", nil)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("code = %d body=%s", recorder.Code, recorder.Body.String())
 	}
-	var tags []models.ModTag
-	if err := json.Unmarshal(recorder.Body.Bytes(), &tags); err != nil {
-		t.Fatalf("not json: %v", err)
-	}
 
-	byGame := map[int64][]string{}
-	for _, tag := range tags {
-		byGame[tag.GameTitleID] = append(byGame[tag.GameTitleID], tag.ModTypeName)
-	}
-	has := func(game int64, name string) bool {
-		for _, candidate := range byGame[game] {
-			if candidate == name {
-				return true
-			}
-		}
-		return false
-	}
-
-	if !has(2, "Return of Rome") {
-		t.Errorf("game 2 is missing Return of Rome: %v", byGame[2])
-	}
-	if !has(4, "Crafted Map") {
-		t.Errorf("game 4 is missing Crafted Map: %v", byGame[4])
-	}
-	if has(4, "Return of Rome") {
-		t.Errorf("game 4 must not inherit the game 2 catalog: %v", byGame[4])
-	}
-	if len(byGame[1]) != 3 {
-		t.Errorf("game 1 has %d tags, want 3: %v", len(byGame[1]), byGame[1])
-	}
-	if !has(1001, "Other") {
-		t.Errorf("game 1001 is missing Other: %v", byGame[1001])
+	want := strings.TrimRight(string(golden), "\n")
+	if got := strings.TrimRight(recorder.Body.String(), "\n"); got != want {
+		t.Fatalf("body =\n%s\nwant\n%s", got, want)
 	}
 }
 

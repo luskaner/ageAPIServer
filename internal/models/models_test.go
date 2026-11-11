@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -25,12 +26,12 @@ func seedMods(t *testing.T, stores *Stores) {
 		t.Fatalf("seed user: %v", err)
 	}
 	mods := []ModInput{
-		{ModID: 100, GameTitleID: 2, ModName: "Chieftains", ModVersion: 1.2, ModTypeID: 1,
-			ModStatusID: 1, CreatorID: user.UserID, Popular: 50, Downloads: 10, TagIDs: []int64{1, 2}},
-		{ModID: 200, GameTitleID: 2, ModName: "AOE2 Balance", ModVersion: 2.0, ModTypeID: 2,
-			ModStatusID: 2, CreatorID: user.UserID, Popular: 90, Downloads: 40, TagIDs: []int64{2}},
-		{ModID: 300, GameTitleID: 3, ModName: "AOE3 Textures", ModVersion: 0.5, ModTypeID: 101,
-			ModStatusID: 1, Popular: 10, TagIDs: []int64{101}},
+		{ModID: 100, GameTitleID: 2, ModName: "Chieftains", ModVersion: 1.2, ModTypeID: 15,
+			ModStatusID: 1, CreatorID: user.UserID, Popular: 50, Downloads: 10, TagIDs: []int64{15, 16}},
+		{ModID: 200, GameTitleID: 2, ModName: "AOE2 Balance", ModVersion: 2.0, ModTypeID: 16,
+			ModStatusID: 2, CreatorID: user.UserID, Popular: 90, Downloads: 40, TagIDs: []int64{16}},
+		{ModID: 300, GameTitleID: 3, ModName: "AOE3 Textures", ModVersion: 0.5, ModTypeID: 15,
+			ModStatusID: 1, Popular: 10, TagIDs: []int64{15}},
 	}
 	for _, mod := range mods {
 		if err := stores.Mods.Upsert(ctx, mod); err != nil {
@@ -86,6 +87,22 @@ func TestSeedCatalogs(t *testing.T) {
 			t.Fatalf("tag %d belongs to game %d", tag.ModTypeID, tag.GameTitleID)
 		}
 	}
+
+	// The catalog is per game: these are the row counts of the live response.
+	wantPerGame := map[int64]int{1: 4, 2: 17, 3: 15, 4: 5, 1001: 15}
+	all, err := stores.Mods.Tags(ctx, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotPerGame := map[int64]int{}
+	for _, tag := range all {
+		gotPerGame[tag.GameTitleID]++
+	}
+	for game, want := range wantPerGame {
+		if gotPerGame[game] != want {
+			t.Fatalf("game %d has %d tags, want %d", game, gotPerGame[game], want)
+		}
+	}
 }
 
 func TestFindAppliesFiltersAndPagination(t *testing.T) {
@@ -120,7 +137,7 @@ func TestFindAppliesFiltersAndPagination(t *testing.T) {
 		t.Fatalf("q=* must not filter, got %d", len(page.Mods))
 	}
 
-	page, err = stores.Mods.Find(ctx, FindFilter{GameTitleID: 2, Tags: []int64{2}, Limit: 10}, Viewer{})
+	page, err = stores.Mods.Find(ctx, FindFilter{GameTitleID: 2, Tags: []int64{16}, Limit: 10}, Viewer{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +145,7 @@ func TestFindAppliesFiltersAndPagination(t *testing.T) {
 		t.Fatalf("tag inclusion returned %d", len(page.Mods))
 	}
 
-	page, err = stores.Mods.Find(ctx, FindFilter{GameTitleID: 2, Tags: []int64{-2}, Limit: 10}, Viewer{})
+	page, err = stores.Mods.Find(ctx, FindFilter{GameTitleID: 2, Tags: []int64{-16}, Limit: 10}, Viewer{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -417,4 +434,47 @@ func TestSessionRoundTrip(t *testing.T) {
 
 func ptr[T any](value T) *T {
 	return &value
+}
+
+// TestSeedRejectsAStaleCatalog covers the guard for a database created before
+// the catalog became per game. The old table keys mod_types on modTypeId alone,
+// so the per-game inserts are silently dropped and the catalog comes out
+// partial; Seed must fail instead of serving it.
+func TestSeedRejectsAStaleCatalog(t *testing.T) {
+	stores := newStores(t)
+
+	if _, err := stores.System.db.Exec(`DROP TABLE mod_types`); err != nil {
+		t.Fatalf("drop: %v", err)
+	}
+	if _, err := stores.System.db.Exec(`CREATE TABLE mod_types (
+		modTypeId   INTEGER PRIMARY KEY,
+		modTypeName TEXT NOT NULL,
+		gameTitleId INTEGER NOT NULL,
+		sortOrder   INTEGER NOT NULL DEFAULT 0
+	)`); err != nil {
+		t.Fatalf("recreate: %v", err)
+	}
+
+	err := stores.System.Seed()
+	if err == nil {
+		t.Fatal("Seed accepted a catalog with missing rows")
+	}
+	if !strings.Contains(err.Error(), "predates the per-game catalog") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// TestSeedIsIdempotent checks that a second Seed leaves the catalog untouched.
+func TestSeedIsIdempotent(t *testing.T) {
+	stores := newStores(t)
+	if err := stores.System.Seed(); err != nil {
+		t.Fatalf("second seed: %v", err)
+	}
+	tags, err := stores.Mods.Tags(context.Background(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tags) != len(seedModTypes) {
+		t.Fatalf("got %d tags, want %d", len(tags), len(seedModTypes))
+	}
 }

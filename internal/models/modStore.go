@@ -98,7 +98,7 @@ func (s *ModStore) Tags(ctx context.Context, gameTitleID int64) ([]ModTag, error
 		query += ` WHERE gameTitleId = ?`
 		args = append(args, gameTitleID)
 	}
-	query += ` ORDER BY gameTitleId, modTypeId`
+	query += ` ORDER BY sortOrder, gameTitleId, modTypeId`
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -129,7 +129,7 @@ SELECT m.modId, m.gameTitleId, g.gameTitleName, m.modName, m.description, m.modD
        COUNT(*) OVER () AS totalCount
 FROM mods m
 LEFT JOIN games g ON g.gameTitleId = m.gameTitleId
-LEFT JOIN mod_types t ON t.modTypeId = m.modTypeId
+LEFT JOIN mod_types t ON t.gameTitleId = m.gameTitleId AND t.modTypeId = m.modTypeId
 LEFT JOIN users u ON u.userId = m.creatorId`
 
 // Find returns one page of mods for the filter.
@@ -231,12 +231,12 @@ func buildWhere(filter FindFilter) (string, []any) {
 	included, excluded := splitTags(filter.Tags)
 	if len(included) > 0 {
 		clauses = append(clauses, `EXISTS (SELECT 1 FROM mod_tag_map tm
-			WHERE tm.modId = m.modId AND tm.modTypeId IN (`+placeholders(len(included))+`))`)
+			WHERE tm.modId = m.modId AND tm.gameTitleId = m.gameTitleId AND tm.modTypeId IN (`+placeholders(len(included))+`))`)
 		args = append(args, argsFor(included)...)
 	}
 	if len(excluded) > 0 {
 		clauses = append(clauses, `NOT EXISTS (SELECT 1 FROM mod_tag_map tm
-			WHERE tm.modId = m.modId AND tm.modTypeId IN (`+placeholders(len(excluded))+`))`)
+			WHERE tm.modId = m.modId AND tm.gameTitleId = m.gameTitleId AND tm.modTypeId IN (`+placeholders(len(excluded))+`))`)
 		args = append(args, argsFor(excluded)...)
 	}
 
@@ -432,7 +432,7 @@ func (s *ModStore) imagesFor(ctx context.Context, ids []int64) (map[int64][]Imag
 
 func (s *ModStore) tagsFor(ctx context.Context, ids []int64) (map[int64][]ModTag, error) {
 	query := `SELECT tm.modId, t.modTypeId, t.modTypeName
-		FROM mod_tag_map tm JOIN mod_types t ON t.modTypeId = tm.modTypeId
+		FROM mod_tag_map tm JOIN mod_types t ON t.gameTitleId = tm.gameTitleId AND t.modTypeId = tm.modTypeId
 		WHERE tm.modId IN (` + placeholders(len(ids)) + `) ORDER BY tm.modId, t.modTypeId`
 	rows, err := s.db.QueryContext(ctx, query, argsFor(ids)...)
 	if err != nil {
@@ -815,7 +815,7 @@ func (s *ModStore) Related(ctx context.Context, modID int64, viewer Viewer) (*Mo
 	query := baseSelect + `
 		WHERE m.gameTitleId = ? AND m.modId <> ?
 		  AND EXISTS (SELECT 1 FROM mod_tag_map mine
-		              JOIN mod_tag_map theirs ON theirs.modTypeId = mine.modTypeId
+		              JOIN mod_tag_map theirs ON theirs.gameTitleId = mine.gameTitleId AND theirs.modTypeId = mine.modTypeId
 		              WHERE mine.modId = ? AND theirs.modId = m.modId)
 		ORDER BY m.popular DESC, m.modId DESC LIMIT 30`
 	rows, err := s.db.QueryContext(ctx, query, gameTitleID, modID, modID)
@@ -1244,8 +1244,8 @@ func (s *ModStore) Upsert(ctx context.Context, input ModInput) error {
 	}
 	for _, tagID := range input.TagIDs {
 		if _, err := tx.ExecContext(ctx,
-			`INSERT OR IGNORE INTO mod_tag_map (modId, modTypeId) VALUES (?, ?)`,
-			input.ModID, tagID); err != nil {
+			`INSERT OR IGNORE INTO mod_tag_map (modId, gameTitleId, modTypeId) VALUES (?, ?, ?)`,
+			input.ModID, input.GameTitleID, tagID); err != nil {
 			return fmt.Errorf("insert mod tag: %w", err)
 		}
 	}

@@ -9,8 +9,8 @@ import (
 
 // schemaVersion is bumped whenever schemaSQL changes. Migrate applies the whole
 // script with CREATE TABLE IF NOT EXISTS, so an existing database only gains
-// the missing objects.
-const schemaVersion = 1
+// the missing objects; a change to an existing table needs the file recreated.
+const schemaVersion = 2
 
 // SystemStore owns the schema and the health check.
 type SystemStore struct {
@@ -31,9 +31,11 @@ CREATE TABLE IF NOT EXISTS games (
 );
 
 CREATE TABLE IF NOT EXISTS mod_types (
-  modTypeId      INTEGER PRIMARY KEY,
+  modTypeId      INTEGER NOT NULL,
   modTypeName    TEXT NOT NULL,
   gameTitleId    INTEGER NOT NULL REFERENCES games(gameTitleId),
+  sortOrder      INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (gameTitleId, modTypeId),
   UNIQUE (gameTitleId, modTypeName)
 );
 
@@ -64,7 +66,7 @@ CREATE TABLE IF NOT EXISTS mods (
   changeList        TEXT,
   modVersion        REAL NOT NULL DEFAULT 0,
   verifiedVersion   TEXT,
-  modTypeId         INTEGER REFERENCES mod_types(modTypeId),
+  modTypeId         INTEGER,
   clientId          TEXT,
   modStatusId       INTEGER NOT NULL CHECK (modStatusId BETWEEN 1 AND 4),
   modStatusMessage  TEXT,
@@ -92,7 +94,8 @@ CREATE TABLE IF NOT EXISTS mods (
   currentRating     REAL NOT NULL DEFAULT 0,
   positiveRatings   INTEGER NOT NULL DEFAULT 0,
   totalRatings      INTEGER NOT NULL DEFAULT 0,
-  reviewsCount      INTEGER NOT NULL DEFAULT 0
+  reviewsCount      INTEGER NOT NULL DEFAULT 0,
+  FOREIGN KEY (gameTitleId, modTypeId) REFERENCES mod_types(gameTitleId, modTypeId)
 );
 CREATE INDEX IF NOT EXISTS idx_mods_game     ON mods(gameTitleId);
 CREATE INDEX IF NOT EXISTS idx_mods_status   ON mods(modStatusId);
@@ -116,10 +119,12 @@ CREATE INDEX IF NOT EXISTS idx_mod_images_mod ON mod_images(modId);
 
 CREATE TABLE IF NOT EXISTS mod_tag_map (
   modId      INTEGER NOT NULL REFERENCES mods(modId) ON DELETE CASCADE,
-  modTypeId  INTEGER NOT NULL REFERENCES mod_types(modTypeId),
-  PRIMARY KEY (modId, modTypeId)
+  gameTitleId INTEGER NOT NULL,
+  modTypeId  INTEGER NOT NULL,
+  PRIMARY KEY (modId, modTypeId),
+  FOREIGN KEY (gameTitleId, modTypeId) REFERENCES mod_types(gameTitleId, modTypeId)
 );
-CREATE INDEX IF NOT EXISTS idx_mod_tag_map_type ON mod_tag_map(modTypeId);
+CREATE INDEX IF NOT EXISTS idx_mod_tag_map_type ON mod_tag_map(gameTitleId, modTypeId);
 
 CREATE TABLE IF NOT EXISTS mod_ratings (
   userId   INTEGER NOT NULL REFERENCES users(userId),
