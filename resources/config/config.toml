@@ -1,0 +1,41 @@
+# ageAPIServer configuration. Every key can be overridden with an environment
+# variable (prefix AGEAPISERVER_, underscore as separator) or a flag
+# (--section.key). Keys are PascalCase, like the sibling ageLANServer.
+
+[Server]
+Addr = ":8080"
+ReadHeaderTimeout = "5s"
+IdleTimeout = "60s"
+MaxBodyBytes = 1048576
+# Empty means the download URL is rebuilt from the request, honouring the
+# X-Forwarded-Proto and X-Forwarded-Host headers of a reverse proxy.
+PublicBaseURL = ""
+
+[DB]
+Path = "ageAPIServer.db"
+BusyTimeoutMs = 5000
+MaxOpenConns = 1
+
+[Log]
+Enabled = true
+Level = "info"
+File = "ageAPIServer.log"
+
+[Session]
+TTL = "720h"
+CookieName = ".AgeOfEmpiresServices"
+# Lax works while the website and the API share a registrable domain. A
+# cross-site deployment needs None (and HTTPS).
+SameSite = "Lax"
+
+[CORS]
+AllowedOrigins = ["https://www.ageofempires.com"]
+AllowCredentials = true
+MaxAge = "600s"
+
+[Pagination]
+# page: start is a 1-based page number (what the captures support).
+# offset: start is a row offset.
+Base = "page"
+DefaultCount = 30
+MaxCount = 20000
