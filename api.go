@@ -40,6 +40,9 @@ type Config struct {
 	CORS CORSConfig
 	// Pagination is the interpretation of start/count.
 	Pagination PaginationConfig
+	// RequireAuthForReadOnly makes the endpoints the spec declares anonymous
+	// reject requests without credentials. The default keeps the spec.
+	RequireAuthForReadOnly bool
 }
 
 // CORSConfig is the browser access policy.
@@ -118,10 +121,11 @@ func New(cfg Config) (*Server, error) {
 	}
 
 	deps := shared.Deps{
-		Stores:     stores,
-		Pagination: pagination,
-		SessionTTL: sessionTTL,
-		CookieName: cookieName,
+		Stores:                 stores,
+		Pagination:             pagination,
+		SessionTTL:             sessionTTL,
+		CookieName:             cookieName,
+		RequireAuthForReadOnly: cfg.RequireAuthForReadOnly,
 	}
 
 	group := router.New()

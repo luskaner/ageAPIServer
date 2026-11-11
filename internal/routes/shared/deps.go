@@ -16,4 +16,7 @@ type Deps struct {
 	SessionTTL    time.Duration
 	CookieName    string
 	SameSite      http.SameSite
+	// RequireAuthForReadOnly turns the endpoints the spec declares anonymous
+	// into authenticated ones.
+	RequireAuthForReadOnly bool
 }

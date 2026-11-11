@@ -71,6 +71,17 @@ type Pagination struct {
 	MaxCount     int
 }
 
+// Auth holds the authentication policy.
+type Auth struct {
+	// RequireForReadOnly makes the endpoints the spec declares anonymous
+	// (Games, Tags, Featured, Find, Detail, Related, Reviews) reject requests
+	// without credentials. The spec says they are anonymous and the default
+	// keeps that, but a live probe of api.ageofempires.com answered 401 on
+	// every one of them except Games and Tags. Set this to match that
+	// behaviour once it is confirmed.
+	RequireForReadOnly bool
+}
+
 // Config is the process configuration, loaded from TOML, environment and flags.
 type Config struct {
 	Server     Server
@@ -79,6 +90,7 @@ type Config struct {
 	Session    Session
 	CORS       CORS
 	Pagination Pagination
+	Auth       Auth
 }
 
 // DefaultConfig returns the values used when neither the file nor the
@@ -116,6 +128,9 @@ func DefaultConfig() Config {
 			Base:         "page",
 			DefaultCount: 30,
 			MaxCount:     20000,
+		},
+		Auth: Auth{
+			RequireForReadOnly: false,
 		},
 	}
 }
@@ -155,8 +170,16 @@ func Load(configPath string, fs *pflag.FlagSet) (Config, string, error) {
 	}
 
 	if fs != nil {
-		if err := k.Load(posflag.ProviderWithValue(fs, ".", k, func(key string, value string) (string, any) {
-			return strings.ToLower(key), value
+		// Only the flags the user actually set are merged. posflag also merges
+		// the default value of every unset flag whose key is not already in the
+		// map, and the defaults declared in cmd are empty strings, so they would
+		// wipe the values of DefaultConfig whenever the config file is missing
+		// or partial.
+		if err := k.Load(posflag.ProviderWithFlag(fs, ".", k, func(f *pflag.Flag) (string, any) {
+			if !f.Changed {
+				return "", nil
+			}
+			return strings.ToLower(f.Name), posflag.FlagVal(fs, f)
 		}), nil); err != nil {
 			return cfg, usedFile, fmt.Errorf("read flags: %w", err)
 		}

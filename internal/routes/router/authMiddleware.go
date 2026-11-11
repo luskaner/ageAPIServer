@@ -50,7 +50,7 @@ func (a *Authenticator) Middleware(required bool) Middleware {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			viewer, err := a.Resolve(r)
 			if err != nil && required {
-				shared.WriteError(w, http.StatusUnauthorized, shared.CodeUnauthorized, "unauthorized")
+				shared.WriteUnauthorized(w)
 				return
 			}
 			if err != nil {
@@ -58,7 +58,7 @@ func (a *Authenticator) Middleware(required bool) Middleware {
 				viewer = models.Viewer{}
 			}
 			if required && !viewer.LoggedOn {
-				shared.WriteError(w, http.StatusUnauthorized, shared.CodeUnauthorized, "unauthorized")
+				shared.WriteUnauthorized(w)
 				return
 			}
 			next.ServeHTTP(w, r.WithContext(WithViewer(r.Context(), viewer)))

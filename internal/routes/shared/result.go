@@ -9,19 +9,24 @@ import (
 	"github.com/luskaner/ageAPIServer/internal/models"
 )
 
-// Error codes of the ErrorResponse body. They are local to this API: the
-// upstream values are not observable from the captures.
+// Error codes of the ErrorResponse body. They are not HTTP statuses: the
+// upstream answers 401 with errorCode 900.
 const (
 	CodeBadRequest   = 400
-	CodeUnauthorized = 401
+	CodeUnauthorized = 900
 	CodeNotFound     = 404
 	CodeInternal     = 500
 )
 
-// ErrorResponse is the body of every error.
+// UnauthorizedMessage is the body message of a 401, as observed upstream.
+const UnauthorizedMessage = "Access Denied - User not authenticated."
+
+// ErrorResponse is the body of every error. IsLoggedOn is only emitted when the
+// caller sets it: the upstream 401 carries it, the other errors do not.
 type ErrorResponse struct {
 	ErrorCode    int64  `json:"errorCode"`
 	ErrorMessage string `json:"errorMessage"`
+	IsLoggedOn   *bool  `json:"isLoggedOn,omitempty"`
 }
 
 // SearchParams is the echo of the request inside a ModList.
@@ -74,6 +79,17 @@ func WriteError(w http.ResponseWriter, status int, code int64, message string) {
 	WriteJSON(w, status, ErrorResponse{ErrorCode: code, ErrorMessage: message})
 }
 
+// WriteUnauthorized writes the 401 body observed upstream, which carries
+// isLoggedOn in addition to the error fields.
+func WriteUnauthorized(w http.ResponseWriter) {
+	loggedOn := false
+	WriteJSON(w, http.StatusUnauthorized, ErrorResponse{
+		ErrorCode:    CodeUnauthorized,
+		ErrorMessage: UnauthorizedMessage,
+		IsLoggedOn:   &loggedOn,
+	})
+}
+
 // WriteStoreError maps a store error to the matching status.
 func WriteStoreError(w http.ResponseWriter, err error) {
 	switch {
@@ -82,7 +98,7 @@ func WriteStoreError(w http.ResponseWriter, err error) {
 	case isNotFound(err):
 		WriteError(w, http.StatusNotFound, CodeNotFound, "not found")
 	case isUnauthorized(err):
-		WriteError(w, http.StatusUnauthorized, CodeUnauthorized, "unauthorized")
+		WriteUnauthorized(w)
 	case isValidation(err):
 		WriteError(w, http.StatusBadRequest, CodeBadRequest, err.Error())
 	default:

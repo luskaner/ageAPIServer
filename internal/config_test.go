@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/spf13/pflag"
 )
 
 func TestLoadDefaults(t *testing.T) {
@@ -128,5 +130,54 @@ func TestEnvironmentOverridesFile(t *testing.T) {
 		if cfg.DB.Path != "from-file.db" {
 			t.Fatalf("attempt %d: db path = %q", attempt, cfg.DB.Path)
 		}
+	}
+}
+
+func TestLoadAuthRequireForReadOnly(t *testing.T) {
+	cfg, _, err := Load("", nil)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.Auth.RequireForReadOnly {
+		t.Fatal("RequireForReadOnly must default to false: the spec declares those endpoints anonymous")
+	}
+
+	t.Setenv("AGEAPISERVER_AUTH_REQUIREFORREADONLY", "true")
+	cfg, _, err = Load("", nil)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if !cfg.Auth.RequireForReadOnly {
+		t.Fatal("environment did not override Auth.RequireForReadOnly")
+	}
+}
+
+// TestUnsetFlagsKeepTheirDefaults is the regression for the posflag merge: an
+// unset flag must not inject its empty default over DefaultConfig.
+func TestUnsetFlagsKeepTheirDefaults(t *testing.T) {
+	fs := pflag.NewFlagSet("test", pflag.ContinueOnError)
+	fs.String("server.addr", "", "")
+	fs.String("log.level", "", "")
+	fs.String("session.ttl", "", "")
+	fs.Int("pagination.maxcount", 0, "")
+	if err := fs.Parse([]string{"--server.addr", ":1234"}); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, _, err := Load("", fs)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.Server.Addr != ":1234" {
+		t.Fatalf("addr = %q", cfg.Server.Addr)
+	}
+	if cfg.Log.Level != "info" {
+		t.Fatalf("log level = %q, want the default info", cfg.Log.Level)
+	}
+	if cfg.Session.TTL != "720h" {
+		t.Fatalf("session ttl = %q, want the default 720h", cfg.Session.TTL)
+	}
+	if cfg.Pagination.MaxCount != 20000 {
+		t.Fatalf("max count = %d, want the default 20000", cfg.Pagination.MaxCount)
 	}
 }

@@ -120,11 +120,31 @@ exceptions, because they are infrastructure rather than endpoints.
 3. **`reviews.reviewerId` stays a string** as the spec declares, so `userReview`
    is resolved through the viewer's Steam id. A cookie-only session has no
    Steam id and therefore no `userReview`.
-4. **Tag catalog.** The captures prove `filter` values 1..24 are in use but carry
-   no response bodies, so the tag names are a placeholder with stable ids.
+4. **Tag catalog.** The catalog is per game, not shared: a live
+   `GET /api/v4/mods/Tags` returns a different list for every title. Games 1, 2
+   and 4 are transcribed from that call; games 3 and 1001 were never captured
+   and keep a placeholder with stable ids.
 5. **`modStatusId` mapping** (1 Published, 2 Featured, 3 Unlisted, 4 Draft) is a
    working assumption, kept as a Go constant so it can be corrected without a
    migration.
+
+## Open question: anonymous read-only endpoints
+
+`api_spec.yml` declares `security: []` on Games, Tags, Featured, Find, Detail,
+Related and Reviews, and this server honours that. A live probe of
+`api.ageofempires.com` answered `401` with `errorCode 900` on all of them except
+Games and Tags.
+
+The evidence is not conclusive. The two endpoints that still answer are exactly
+the two static, cacheable GETs, so a CDN serving them from cache while the
+origin rejects anonymous traffic explains the split without any policy change.
+The probe also reported an empty body for `Detail`, which contradicts the JSON
+error it got everywhere else, and it never ran a control request with a valid
+credential.
+
+The default therefore stays spec-compliant. Set `Auth.RequireForReadOnly` (or
+`AGEAPISERVER_AUTH_REQUIREFORREADONLY=true`) to make those seven endpoints
+reject anonymous requests if the finding is confirmed.
 
 ## Tests
 

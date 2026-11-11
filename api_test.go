@@ -345,3 +345,99 @@ func TestAuthenticatedFlow(t *testing.T) {
 		}
 	}
 }
+
+// TestGamesMatchesUpstreamPayload pins the exact body a live
+// GET /api/v4/mods/Games returns, including the short Retold title.
+func TestGamesMatchesUpstreamPayload(t *testing.T) {
+	server, _ := newTestServer(t)
+	recorder := do(t, server.Handler(), http.MethodGet, "/api/v4/mods/Games", "", nil)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("code = %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	want := `[{"gameTitleId":1,"gameTitleName":"Age of Empires DE","gameVersion":null},` +
+		`{"gameTitleId":2,"gameTitleName":"Age of Empires II DE","gameVersion":null},` +
+		`{"gameTitleId":3,"gameTitleName":"Age of Empires III DE","gameVersion":null},` +
+		`{"gameTitleId":4,"gameTitleName":"Age of Empires IV","gameVersion":null},` +
+		`{"gameTitleId":1001,"gameTitleName":"AoM: Retold","gameVersion":null}]`
+	if got := strings.TrimRight(recorder.Body.String(), "\n"); got != want {
+		t.Fatalf("body =\n%s\nwant\n%s", got, want)
+	}
+}
+
+// TestTagsArePerGame checks that the catalog is not shared across titles: the
+// upstream returns a different list for every game.
+func TestTagsArePerGame(t *testing.T) {
+	server, _ := newTestServer(t)
+	recorder := do(t, server.Handler(), http.MethodGet, "/api/v4/mods/Tags", "", nil)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("code = %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var tags []models.ModTag
+	if err := json.Unmarshal(recorder.Body.Bytes(), &tags); err != nil {
+		t.Fatalf("not json: %v", err)
+	}
+
+	byGame := map[int64][]string{}
+	for _, tag := range tags {
+		byGame[tag.GameTitleID] = append(byGame[tag.GameTitleID], tag.ModTypeName)
+	}
+	has := func(game int64, name string) bool {
+		for _, candidate := range byGame[game] {
+			if candidate == name {
+				return true
+			}
+		}
+		return false
+	}
+
+	if !has(2, "Return of Rome") {
+		t.Errorf("game 2 is missing Return of Rome: %v", byGame[2])
+	}
+	if !has(4, "Crafted Map") {
+		t.Errorf("game 4 is missing Crafted Map: %v", byGame[4])
+	}
+	if has(4, "Return of Rome") {
+		t.Errorf("game 4 must not inherit the game 2 catalog: %v", byGame[4])
+	}
+	if len(byGame[1]) != 3 {
+		t.Errorf("game 1 has %d tags, want 3: %v", len(byGame[1]), byGame[1])
+	}
+	if !has(1001, "Other") {
+		t.Errorf("game 1001 is missing Other: %v", byGame[1001])
+	}
+}
+
+// TestUnauthorizedBodyMatchesUpstream pins the 401 body: errorCode 900, the
+// upstream message and isLoggedOn.
+func TestUnauthorizedBodyMatchesUpstream(t *testing.T) {
+	server, _ := newTestServer(t)
+	recorder := do(t, server.Handler(), http.MethodPost, "/api/v4/mods/my", "{}", nil)
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("code = %d, want 401", recorder.Code)
+	}
+	want := `{"errorCode":900,"errorMessage":"Access Denied - User not authenticated.","isLoggedOn":false}`
+	if got := strings.TrimRight(recorder.Body.String(), "\n"); got != want {
+		t.Fatalf("body =\n%s\nwant\n%s", got, want)
+	}
+}
+
+// TestRequireAuthForReadOnly checks the opt-in that makes the endpoints the
+// spec declares anonymous reject requests without credentials.
+func TestRequireAuthForReadOnly(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+	server, err := New(Config{DBPath: path, RequireAuthForReadOnly: true})
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	t.Cleanup(func() { _ = server.Shutdown(context.Background()) })
+
+	body := `{"game":2,"start":1,"count":5}`
+	recorder := do(t, server.Handler(), http.MethodPost, "/api/v4/Mods/Find/", body, nil)
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("find code = %d, want 401", recorder.Code)
+	}
+	recorder = do(t, server.Handler(), http.MethodGet, "/api/v4/mods/Games", "", nil)
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("games code = %d, want 401", recorder.Code)
+	}
+}

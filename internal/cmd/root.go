@@ -105,6 +105,7 @@ func runRoot(fs *pflag.FlagSet) (error, int) {
 			DefaultCount: cfg.Pagination.DefaultCount,
 			MaxCount:     cfg.Pagination.MaxCount,
 		},
+		RequireAuthForReadOnly: cfg.Auth.RequireForReadOnly,
 	})
 	if err != nil {
 		return fmt.Errorf("build server: %w", err), i.ErrDatabase
