@@ -1,0 +1,19 @@
+# SQLite databases
+ageAPIServer.db
+*.db
+*.db-wal
+*.db-shm
+
+# Logs
+*.log
+
+# Binaries
+ageAPIServer
+ageAPIServer.exe
+ageapiserver
+ageapiserver.exe
+*.test
+/dist/
+
+# Local implementation plan (kept out of the repository on purpose)
+ageAPIServer-implementation.md

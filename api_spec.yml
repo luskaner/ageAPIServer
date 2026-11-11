@@ -1,0 +1,1707 @@
+openapi: "3.2.0"
+info:
+  title: Age of Empires Mods API
+  version: "3.2.0"
+  description: |
+    OpenAPI specification for the Age of Empires Mods API (api.ageofempires.com).
+    This API provides access to mod browsing, management, and download functionality
+    for Age of Empires DE, Age of Empires II DE, Age of Empires III DE, Age of Empires IV,
+    and Age of Mythology: Retold.
+
+    Authentication: game clients send a Steam bearer token (`Authorization: Steam1.0 ...`).
+    The website (www.ageofempires.com) calls the same API with its session cookie instead.
+    Read-only endpoints (games, tags, featured, find, detail, related, reviews) were
+    observed working anonymously.
+
+    Path matching: the service resolves paths case-insensitively and treats trailing
+    slashes as optional. Native clients call `/api/v4/Mods/...`; the website calls
+    `/api/v4/mods/...` (including `/api/v4/mods/UnSubscribe/...`). Each operation is
+    documented once, using the casing of the path key.
+
+    Hosts: the Age of Empires IV client sends every mod request to
+    `api-dr.ageofempires.com`, not only downloads; other clients use
+    `api.ageofempires.com`. Both hosts serve the same API.
+  contact:
+    name: Age of Empires API
+    url: https://www.ageofempires.com
+  license:
+    name: Proprietary
+    url: https://www.ageofempires.com/terms-of-use
+servers:
+  - url: https://api.ageofempires.com
+    description: Primary API server
+  - url: https://api-dr.ageofempires.com
+    description: Alternate host used by the Age of Empires IV client for all mod endpoints, and by all clients for downloads
+security:
+  - SteamAuth: []
+  - WebSession: []
+tags:
+  - name: Games
+    description: Game metadata endpoints
+  - name: Tags
+    description: Mod type/tag endpoints
+  - name: Featured
+    description: Featured mods endpoints
+  - name: Mods
+    description: Mod search, detail, and management endpoints
+  - name: Polls
+    description: Poll endpoints
+  - name: Moderation
+    description: Text moderation endpoint
+components:
+  securitySchemes:
+    SteamAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: "Steam1.0"
+      description: Steam authentication token sent by the game clients
+    WebSession:
+      type: apiKey
+      in: cookie
+      name: .AgeOfEmpiresServices
+      description: Website session cookie used by www.ageofempires.com instead of a Steam token
+  schemas:
+    # Game schemas
+    Game:
+      type: object
+      properties:
+        gameTitleId:
+          type: integer
+          description: Unique game identifier
+          enum: [1, 2, 3, 4, 1001]
+        gameTitleName:
+          type: string
+          description: Display name of the game
+        gameVersion:
+          type: string
+          nullable: true
+          description: Current game version (if available)
+      required:
+        - gameTitleId
+        - gameTitleName
+      example:
+        gameTitleId: 2
+        gameTitleName: "Age of Empires II DE"
+        gameVersion: null
+
+    GameList:
+      type: array
+      items:
+        $ref: '#/components/schemas/Game'
+
+    # Tag schemas
+    ModTag:
+      type: object
+      properties:
+        modTypeId:
+          type: integer
+          description: Unique tag type identifier
+        modTypeName:
+          type: string
+          description: Display name of the mod type
+        gameTitleId:
+          type: integer
+          description: Game this tag belongs to
+      required:
+        - modTypeId
+        - modTypeName
+        - gameTitleId
+      example:
+        modTypeId: 15
+        modTypeName: "Random Maps"
+        gameTitleId: 2
+
+    ModTagList:
+      type: array
+      items:
+        $ref: '#/components/schemas/ModTag'
+
+    # Mod schemas
+    ModMetaData:
+      type: object
+      properties:
+        modId:
+          type: integer
+        gameTitleId:
+          type: integer
+          nullable: true
+        gameTitleName:
+          type: string
+          nullable: true
+        modName:
+          type: string
+        description:
+          type: string
+          nullable: true
+        modDescription:
+          type: string
+          nullable: true
+        changeList:
+          type: string
+          nullable: true
+        modVersion:
+          type: number
+        verifiedVersion:
+          type: string
+          nullable: true
+        modTypeId:
+          type: integer
+          nullable: true
+        clientId:
+          type: string
+          nullable: true
+        modType:
+          type: string
+          nullable: true
+        modTags:
+          type: array
+          items:
+            type: string
+          nullable: true
+        modTagIds:
+          type: array
+          items:
+            type: integer
+          nullable: true
+        modTagNames:
+          type: array
+          items:
+            type: string
+          nullable: true
+        metaData:
+          type: object
+          nullable: true
+        modStatusId:
+          type: integer
+          nullable: true
+        modStatus:
+          type: string
+          enum: [Published, Featured, Unlisted, Draft]
+          nullable: true
+        modStatusMessage:
+          type: string
+          nullable: true
+        modVisibility:
+          type: string
+          enum: [Public, Private, Unlisted]
+          nullable: true
+        creatorId:
+          type: integer
+          nullable: true
+        creatorName:
+          type: string
+          nullable: true
+        creatorAvatarUrl:
+          type: string
+          nullable: true
+        isOwner:
+          type: boolean
+        isLoggedOn:
+          type: boolean
+        allowDiscussion:
+          type: boolean
+        discourseUrl:
+          type: string
+          nullable: true
+        createDate:
+          type: string
+          format: date-time
+        lastUpdate:
+          type: string
+          format: date-time
+        updateAvailable:
+          type: boolean
+        modFileSize:
+          type: number
+        modDiskSize:
+          type: number
+          nullable: true
+        popular:
+          type: integer
+          nullable: true
+        downloads:
+          type: integer
+          nullable: true
+        installs:
+          type: integer
+          nullable: true
+        likes:
+          type: integer
+          nullable: true
+        userLiked:
+          type: boolean
+          nullable: true
+        ratings:
+          nullable: true
+          allOf:
+            - $ref: '#/components/schemas/Ratings'
+        currentRating:
+          type: number
+        userDownloaded:
+          type: boolean
+          nullable: true
+        userInstalled:
+          type: boolean
+        userFlagged:
+          type: boolean
+          nullable: true
+        userRating:
+          type: number
+          nullable: true
+        userReview:
+          type: string
+          nullable: true
+        positiveRatings:
+          type: integer
+        totalRatings:
+          type: integer
+        thumbnail:
+          type: string
+        fileUrl:
+          type: string
+          nullable: true
+        imageUrls:
+          type: array
+          items:
+            type: object
+            properties:
+              imageId:
+                type: string
+              displayIndex:
+                type: integer
+              imageName:
+                type: string
+              imageThumbnail:
+                type: string
+              imageFileSize:
+                type: number
+                nullable: true
+          nullable: true
+        thirtyDayPopular:
+          type: integer
+          nullable: true
+        sortName:
+          type: string
+          nullable: true
+        sendNotifications:
+          type: boolean
+
+    Mod:
+      description: A mod entry as returned in `modList` arrays.
+      allOf:
+        - $ref: '#/components/schemas/ModMetaData'
+
+    ModList:
+      type: object
+      properties:
+        searchParams:
+          $ref: '#/components/schemas/SearchParams'
+        modList:
+          type: array
+          items:
+            $ref: '#/components/schemas/Mod'
+        totalCount:
+          type: integer
+          nullable: true
+        isLoggedOn:
+          type: boolean
+        errorCode:
+          type: integer
+        errorMessage:
+          type: string
+
+    SearchParams:
+      type: object
+      properties:
+        q:
+          type: string
+          nullable: true
+          description: Search query
+        creator:
+          type: string
+          nullable: true
+        filter:
+          type: integer
+          description: Mod type filter ID
+        sort:
+          type: string
+          nullable: true
+          enum: ["", popular, createDate, lastUpdate, downloads, rating, recentpopular, subscribers, creatorName, modName]
+        order:
+          type: string
+          nullable: true
+          enum: ["", ASC, DESC, asc, desc]
+        start:
+          type: integer
+          description: Start offset or page as sent by the client (both 0-based and 1-based pagination are observed)
+        count:
+          type: integer
+          description: Items per page
+        game:
+          type: integer
+          description: Game ID
+        modid:
+          type: string
+          nullable: true
+          description: Mod ID filter
+
+    # Request schemas
+    FindModsRequest:
+      type: object
+      required:
+        - game
+      properties:
+        game:
+          type: integer
+          description: Game ID (1, 2, 3, 4, 1001)
+        start:
+          type: integer
+          default: 1
+          minimum: 0
+        count:
+          type: integer
+          default: 30
+          minimum: 0
+        order:
+          type: string
+          enum: ["", asc, desc, ASC, DESC]
+          default: desc
+        sort:
+          type: string
+          enum: ["", popular, createDate, lastUpdate, downloads, rating, recentpopular, subscribers, modName]
+          default: popular
+        q:
+          type: string
+          default: ""
+        filter:
+          type: integer
+          default: 0
+        creator:
+          type: string
+          nullable: true
+        modid:
+          description: Mod ID filter; clients send either an integer (0 = none) or an empty string
+          oneOf:
+            - type: integer
+            - type: string
+        status:
+          type: string
+          nullable: true
+        tags:
+          description: Tag/type IDs; observed as integers, and as strings such as "-14"
+          type: array
+          items:
+            oneOf:
+              - type: integer
+              - type: string
+          nullable: true
+
+    FindModsRequestV1:
+      type: object
+      required:
+        - game
+      properties:
+        game:
+          type: integer
+        start:
+          type: integer
+          default: 1
+        count:
+          type: integer
+          default: 45
+        order:
+          type: string
+          enum: ["", ASC, DESC]
+          default: DESC
+        sort:
+          type: string
+          enum: ["", popular, createDate, lastUpdate, downloads, rating]
+          default: popular
+        q:
+          type: string
+          default: ""
+        filter:
+          type: integer
+          default: 0
+        time:
+          type: string
+          description: Timestamp for pagination
+
+    InstalledModsRequest:
+      description: |
+        Same filters as the Find request. Native clients usually send only `game`
+        (AOE3, AOM), while the AOE4 client and the website send the full filter body.
+      allOf:
+        - $ref: '#/components/schemas/FindModsRequest'
+
+    MyModsRequest:
+      type: object
+      required:
+        - game
+      properties:
+        game:
+          type: integer
+        start:
+          type: integer
+          default: 1
+        count:
+          type: integer
+          default: 45
+        order:
+          type: string
+          enum: ["", ASC, DESC]
+          default: DESC
+        sort:
+          type: string
+          enum: ["", popular, createDate, lastUpdate, downloads, rating]
+          default: popular
+        q:
+          type: string
+          default: ""
+        filter:
+          type: integer
+          default: 0
+        time:
+          type: string
+
+    RateModRequest:
+      type: object
+      required:
+        - modId
+        - rating
+      properties:
+        modId:
+          type: integer
+        rating:
+          type: integer
+          minimum: 1
+          maximum: 5
+
+    FlagModRequest:
+      type: object
+      description: Report/flag a mod. `id` is the mod ID and `stringValue` is the reason label.
+      required:
+        - id
+        - stringValue
+      properties:
+        id:
+          type: integer
+          description: Mod ID
+        stringValue:
+          type: string
+          example: Poor Performance
+        boolValue:
+          type: boolean
+
+    InstallModRequest:
+      type: object
+      required:
+        - id
+      properties:
+        id:
+          type: integer
+          description: Mod ID
+
+    UninstallModRequest:
+      type: object
+      required:
+        - id
+      properties:
+        id:
+          type: integer
+          description: Mod ID
+
+    FeaturedModsRequest:
+      type: object
+      required:
+        - game
+      properties:
+        q:
+          type: string
+          default: ""
+        game:
+          type: integer
+          default: 1001
+        modid:
+          type: integer
+          default: 0
+        filter:
+          type: integer
+          default: 0
+        status:
+          type: string
+          default: ""
+        tags:
+          type: array
+          items:
+            oneOf:
+              - type: integer
+              - type: string
+          default: []
+        sort:
+          type: string
+          enum: [recentpopular, popular, createDate, lastUpdate]
+          default: recentpopular
+        order:
+          type: string
+          enum: [ASC, DESC]
+          default: DESC
+        start:
+          type: integer
+          default: 1
+        count:
+          type: integer
+          default: 3
+
+    # Response schemas
+    SubscribeResponse:
+      type: object
+      properties:
+        downloadUrl:
+          type: string
+          format: uri
+        downloadCount:
+          type: integer
+        installCount:
+          type: integer
+          nullable: true
+        gameTitleId:
+          type: integer
+        fileCRC:
+          type: string
+
+    UnsubscribeResponse:
+      type: boolean
+
+    RateModResponse:
+      type: object
+      properties:
+        statusCode:
+          type: integer
+          nullable: true
+        responseMessage:
+          type: string
+          nullable: true
+        playFabResponse:
+          $ref: '#/components/schemas/Ratings'
+
+    Ratings:
+      type: object
+      properties:
+        leastFavorableReview:
+          type: object
+          nullable: true
+        mostFavorableReview:
+          type: object
+          nullable: true
+        rating:
+          type: object
+          properties:
+            average:
+              type: number
+            count1Star:
+              type: integer
+              nullable: true
+            count2Star:
+              type: integer
+              nullable: true
+            count3Star:
+              type: integer
+              nullable: true
+            count4Star:
+              type: integer
+              nullable: true
+            count5Star:
+              type: integer
+              nullable: true
+            totalCount:
+              type: integer
+        reviewsCount:
+          type: integer
+
+    FlagResponse:
+      type: object
+      properties:
+        errorCode:
+          type: integer
+        errorMessage:
+          type: string
+        resultKey:
+          type: string
+        resultValue:
+          type: string
+        resultJson:
+          type: object
+          nullable: true
+
+    InstallModResponse:
+      type: object
+      properties:
+        contentType:
+          type: string
+          nullable: true
+        serializerSettings:
+          type: object
+          nullable: true
+        statusCode:
+          type: integer
+          nullable: true
+        value:
+          $ref: '#/components/schemas/SubscribeResponse'
+
+    UninstallModResponse:
+      type: object
+      properties:
+        contentType:
+          type: string
+          nullable: true
+        serializerSettings:
+          type: object
+          nullable: true
+        statusCode:
+          type: integer
+          nullable: true
+        value:
+          type: boolean
+
+    DownloadResponse:
+      type: object
+      properties:
+        downloadUrl:
+          type: string
+          format: uri
+        downloadCount:
+          type: integer
+        installCount:
+          type: integer
+          nullable: true
+        gameTitleId:
+          type: integer
+        fileCRC:
+          type: string
+
+    DetailResponse:
+      type: object
+      properties:
+        modId:
+          type: integer
+        gameTitleId:
+          type: integer
+        gameTitleName:
+          type: string
+        modName:
+          type: string
+        description:
+          type: string
+        modDescription:
+          type: string
+        changeList:
+          type: string
+        modVersion:
+          type: number
+        verifiedVersion:
+          type: string
+          nullable: true
+        modTypeId:
+          type: integer
+          nullable: true
+        clientId:
+          type: string
+          nullable: true
+        modType:
+          type: string
+          nullable: true
+        modTags:
+          type: array
+          items:
+            type: string
+          nullable: true
+        modTagIds:
+          type: array
+          items:
+            type: integer
+          nullable: true
+        modTagNames:
+          type: array
+          items:
+            type: string
+          nullable: true
+        metaData:
+          nullable: true
+          allOf:
+            - $ref: '#/components/schemas/ModMetaData'
+        modStatusId:
+          type: integer
+        modStatus:
+          type: string
+        modStatusMessage:
+          type: string
+          nullable: true
+        modVisibility:
+          type: string
+          nullable: true
+        creatorId:
+          type: integer
+          nullable: true
+        creatorName:
+          type: string
+          nullable: true
+        creatorAvatarUrl:
+          type: string
+          nullable: true
+        isOwner:
+          type: boolean
+          nullable: true
+        isLoggedOn:
+          type: boolean
+        allowDiscussion:
+          type: boolean
+        discourseUrl:
+          type: string
+          nullable: true
+        createDate:
+          type: string
+          format: date-time
+          nullable: true
+        lastUpdate:
+          type: string
+          format: date-time
+          nullable: true
+        updateAvailable:
+          type: boolean
+          nullable: true
+        modFileSize:
+          type: number
+          nullable: true
+        modDiskSize:
+          type: number
+          nullable: true
+        popular:
+          type: integer
+          nullable: true
+        downloads:
+          type: integer
+          nullable: true
+        installs:
+          type: integer
+          nullable: true
+        likes:
+          type: integer
+          nullable: true
+        userLiked:
+          type: boolean
+          nullable: true
+        ratings:
+          nullable: true
+          allOf:
+            - $ref: '#/components/schemas/Ratings'
+        currentRating:
+          type: number
+        userDownloaded:
+          type: boolean
+          nullable: true
+        userInstalled:
+          type: boolean
+          nullable: true
+        userFlagged:
+          type: boolean
+          nullable: true
+        userRating:
+          type: number
+          nullable: true
+        userReview:
+          type: string
+          nullable: true
+        positiveRatings:
+          type: integer
+        totalRatings:
+          type: integer
+        thumbnail:
+          type: string
+          nullable: true
+        fileUrl:
+          type: string
+          nullable: true
+        imageUrls:
+          type: array
+          items:
+            type: object
+            properties:
+              imageId:
+                type: string
+              displayIndex:
+                type: integer
+              imageName:
+                type: string
+              imageThumbnail:
+                type: string
+              imageFileSize:
+                type: number
+                nullable: true
+          nullable: true
+        thirtyDayPopular:
+          type: integer
+          nullable: true
+        sortName:
+          type: string
+          nullable: true
+        sendNotifications:
+          type: boolean
+
+    # Moderation schemas
+    TextModerationRequest:
+      type: object
+      required:
+        - conversationId
+        - textContent
+        - language
+        - textType
+      properties:
+        conversationId:
+          type: string
+        textContent:
+          type: string
+        language:
+          type: string
+        textType:
+          type: string
+          enum: [SanitisationUsername, SanitisationInput]
+        includeResponse:
+          type: boolean
+          default: false
+
+    TextModerationResponse:
+      type: object
+      properties:
+        filterResult:
+          type: string
+          enum: [Allow, Block, Review]
+        familyFriendlyResult:
+          type: string
+          enum: [Allow, Block, Review]
+        mediumResult:
+          type: string
+          enum: [Allow, Block, Review]
+        matureResult:
+          type: string
+          enum: [Allow, Block, Review]
+        maturePlusResult:
+          type: string
+          enum: [Allow, Block, Review]
+        translationAvailable:
+          type: boolean
+        moderatedText:
+          type: string
+        language:
+          type: string
+
+    ErrorResponse:
+      type: object
+      properties:
+        errorCode:
+          type: integer
+        errorMessage:
+          type: string
+paths:
+  # Games
+  /api/v4/mods/Games:
+    get:
+      tags:
+        - Games
+      summary: Get list of supported games
+      description: Returns all games that support mods
+      operationId: getGames
+      security: []
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GameList'
+        '401':
+          description: Unauthorized - Invalid or missing Steam token
+        '500':
+          description: Internal server error
+
+  # Tags
+  /api/v4/mods/Tags:
+    get:
+      tags:
+        - Tags
+      summary: Get all mod tags/types
+      description: Returns all mod types grouped by game
+      operationId: getTags
+      security: []
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModTagList'
+        '401':
+          description: Unauthorized
+        '500':
+          description: Internal server error
+
+  # Featured
+  /api/v4/mods/Featured:
+    post:
+      tags:
+        - Featured
+      summary: Get featured mods
+      description: Returns featured mods for a specific game
+      operationId: getFeaturedMods
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FeaturedModsRequest'
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModList'
+        '400':
+          description: Bad request
+        '401':
+          description: Unauthorized
+        '500':
+          description: Internal server error
+
+  # Mods - Find (v4)
+  /api/v4/Mods/Find/:
+    post:
+      tags:
+        - Mods
+      summary: Search mods (v4)
+      description: Search for mods with various filters and sorting options
+      operationId: findModsV4
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FindModsRequest'
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModList'
+        '400':
+          description: Bad request
+        '401':
+          description: Unauthorized
+        '500':
+          description: Internal server error
+
+  # Mods - Detail (v4)
+  /api/v4/Mods/Detail/{modId}:
+    get:
+      tags:
+        - Mods
+      summary: Get mod details (v4)
+      description: Returns detailed information about a specific mod
+      operationId: getModDetailV4
+      security: []
+      parameters:
+        - name: modId
+          in: path
+          required: true
+          schema:
+            type: integer
+          description: Mod ID
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DetailResponse'
+        '401':
+          description: Unauthorized
+        '404':
+          description: Mod not found
+        '500':
+          description: Internal server error
+
+  # Mods - Installed (v4)
+  /api/v4/Mods/Installed/:
+    post:
+      tags:
+        - Mods
+      summary: Get installed mods (v4)
+      description: Returns list of mods installed by the current user
+      operationId: getInstalledModsV4
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InstalledModsRequest'
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModList'
+        '401':
+          description: Unauthorized
+        '500':
+          description: Internal server error
+
+  # Mods - Subscribe (v4)
+  /api/v4/Mods/Subscribe/{modId}:
+    get:
+      tags:
+        - Mods
+      summary: Subscribe to mod (v4)
+      description: Subscribe to a mod and get download URL
+      operationId: subscribeModV4
+      parameters:
+        - name: modId
+          in: path
+          required: true
+          schema:
+            type: integer
+          description: Mod ID
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubscribeResponse'
+        '401':
+          description: Unauthorized
+        '404':
+          description: Mod not found
+        '500':
+          description: Internal server error
+
+  # Mods - Unsubscribe (v4)
+  /api/v4/Mods/Unsubscribe/{modId}:
+    get:
+      tags:
+        - Mods
+      summary: Unsubscribe from mod (v4)
+      description: Unsubscribe from a mod
+      operationId: unsubscribeModV4
+      parameters:
+        - name: modId
+          in: path
+          required: true
+          schema:
+            type: integer
+          description: Mod ID
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UnsubscribeResponse'
+        '401':
+          description: Unauthorized
+        '404':
+          description: Mod not found
+        '500':
+          description: Internal server error
+
+  # Mods - Rate (v4)
+  /api/v4/Mods/Rate/:
+    post:
+      tags:
+        - Mods
+      summary: Rate a mod (v4)
+      description: Submit a rating for a mod (1-5 stars)
+      operationId: rateModV4
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RateModRequest'
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RateModResponse'
+        '400':
+          description: Bad request
+        '401':
+          description: Unauthorized
+        '500':
+          description: Internal server error
+
+  # Mods - Download (v4)
+  /api/v4/Mods/Download/{modId}/:
+    get:
+      tags:
+        - Mods
+      summary: Get mod download URL (v4)
+      description: Returns the direct download URL for a mod file
+      operationId: downloadModV4
+      parameters:
+        - name: modId
+          in: path
+          required: true
+          schema:
+            type: integer
+          description: Mod ID
+      servers:
+        - url: https://api-dr.ageofempires.com
+          description: Download redirect server
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DownloadResponse'
+        '401':
+          description: Unauthorized
+        '404':
+          description: Mod not found
+        '500':
+          description: Internal server error
+
+  # Mods - Detail (v1, AOE2)
+  /api/v1/Mods/Detail/:
+    post:
+      tags:
+        - Mods
+      summary: Get mod details (v1, AOE2)
+      description: Returns detailed information about a specific mod (legacy v1 endpoint for AOE2)
+      operationId: getModDetailV1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - modid
+              properties:
+                modid:
+                  type: integer
+                game:
+                  type: integer
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DetailResponse'
+        '401':
+          description: Unauthorized
+        '404':
+          description: Mod not found
+        '500':
+          description: Internal server error
+
+  # Mods - FindAsUser (v1, AOE2)
+  /api/v1/Mods/FindAsUser/:
+    post:
+      tags:
+        - Mods
+      summary: Search mods (v1, AOE2)
+      description: Search for mods with various filters (legacy v1 endpoint for AOE2)
+      operationId: findModsAsUserV1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FindModsRequestV1'
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModList'
+        '401':
+          description: Unauthorized
+        '500':
+          description: Internal server error
+
+  # Mods - Installed (v1, AOE2)
+  /api/v1/Mods/Installed/:
+    post:
+      tags:
+        - Mods
+      summary: Get installed mods (v1, AOE2)
+      description: Returns list of mods installed by the current user (legacy v1 endpoint for AOE2)
+      operationId: getInstalledModsV1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InstalledModsRequest'
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModList'
+        '401':
+          description: Unauthorized
+        '500':
+          description: Internal server error
+
+  # Mods - My (v1, AOE2)
+  /api/v1/Mods/My/:
+    post:
+      tags:
+        - Mods
+      summary: Get my mods (v1, AOE2)
+      description: Returns mods created by the current user (legacy v1 endpoint for AOE2)
+      operationId: getMyModsV1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MyModsRequest'
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModList'
+        '401':
+          description: Unauthorized
+        '500':
+          description: Internal server error
+
+  # Mods - Flag (v1, AOE2)
+  /api/v1/Mods/Flag/:
+    post:
+      tags:
+        - Mods
+      summary: Flag a mod (v1, AOE2)
+      description: Report/flag a mod for review (legacy v1 endpoint for AOE2)
+      operationId: flagModV1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FlagModRequest'
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FlagResponse'
+        '401':
+          description: Unauthorized
+        '500':
+          description: Internal server error
+
+  # Mods - Install (v1, AOE2)
+  /api/v1/Mods/Install/:
+    post:
+      tags:
+        - Mods
+      summary: Install a mod (v1, AOE2)
+      description: Install a mod for the current user (legacy v1 endpoint for AOE2)
+      operationId: installModV1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InstallModRequest'
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InstallModResponse'
+        '401':
+          description: Unauthorized
+        '500':
+          description: Internal server error
+
+  # Mods - Uninstall (v1, AOE2)
+  /api/v1/Mods/Uninstall/:
+    post:
+      tags:
+        - Mods
+      summary: Uninstall a mod (v1, AOE2)
+      description: Uninstall a mod for the current user (legacy v1 endpoint for AOE2)
+      operationId: uninstallModV1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UninstallModRequest'
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UninstallModResponse'
+        '401':
+          description: Unauthorized
+        '500':
+          description: Internal server error
+
+  # Reviews
+  /api/v4/mods/Reviews:
+    post:
+      tags:
+        - Mods
+      summary: Get mod reviews
+      description: Returns reviews for a specific mod
+      operationId: getModReviews
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - modId
+              properties:
+                modId:
+                  type: string
+                  description: Mod ID (as string)
+                page:
+                  type: integer
+                  default: 1
+                  minimum: 1
+                count:
+                  type: integer
+                  default: 5
+                  minimum: 1
+                  maximum: 100
+                ratingNum:
+                  type: integer
+                  description: Filter by rating number
+                ratingLabel:
+                  type: string
+                  description: Rating label filter
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  continuationToken:
+                    type: string
+                    nullable: true
+                  reviews:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        helpfulNegative:
+                          type: integer
+                        helpfulnessVotes:
+                          type: integer
+                        helpfulPositive:
+                          type: integer
+                        isInstalled:
+                          type: boolean
+                        itemId:
+                          type: string
+                          nullable: true
+                        itemVersion:
+                          type: string
+                        locale:
+                          type: string
+                          nullable: true
+                        rating:
+                          type: integer
+                        reviewerId:
+                          type: string
+                          nullable: true
+                        reviewId:
+                          type: string
+                          nullable: true
+                        reviewText:
+                          type: string
+                        submitted:
+                          type: string
+                          format: date-time
+                        title:
+                          type: string
+                        reviewerName:
+                          type: string
+                        avatarUrl:
+                          type: string
+                  totalCount:
+                    type: integer
+        '401':
+          description: Unauthorized
+        '500':
+          description: Internal server error
+
+  # Related mods
+  /api/v4/mods/Related/{modId}:
+    get:
+      tags:
+        - Mods
+      summary: Get related mods
+      description: Returns mods related to the specified mod
+      operationId: getRelatedMods
+      security: []
+      parameters:
+        - name: modId
+          in: path
+          required: true
+          schema:
+            type: integer
+          description: Mod ID
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModList'
+        '401':
+          description: Unauthorized
+        '404':
+          description: Mod not found
+        '500':
+          description: Internal server error
+  # My mods (v4)
+  /api/v4/Mods/My/:
+    post:
+      tags:
+        - Mods
+      summary: Get my mods (v4)
+      description: Returns mods created by the current user
+      operationId: getMyModsV4
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - game
+              properties:
+                game:
+                  type: integer
+                start:
+                  type: integer
+                  default: 1
+                count:
+                  type: integer
+                  default: 1000
+                order:
+                  type: string
+                  enum: [ASC, DESC]
+                  default: DESC
+                sort:
+                  type: string
+                  enum: [popular, createDate, lastUpdate, downloads, rating]
+                  default: popular
+                q:
+                  type: string
+                  default: ""
+                filter:
+                  type: integer
+                  default: 0
+                modid:
+                  type: string
+                  default: ""
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModList'
+        '401':
+          description: Unauthorized
+        '500':
+          description: Internal server error
+
+  # Polls
+  /Poll/list:
+    get:
+      tags:
+        - Polls
+      summary: Get active polls
+      description: Returns list of active polls
+      operationId: getPollList
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id:
+                      type: string
+                    gameId:
+                      type: integer
+                    created:
+                      type: string
+                      format: date-time
+                    startDateTime:
+                      type: string
+                      format: date-time
+                    endDateTime:
+                      type: string
+                      format: date-time
+                    expireDateTime:
+                      type: string
+                      format: date-time
+                    metadata:
+                      type: string
+                    icon:
+                      type: string
+                      nullable: true
+        '401':
+          description: Unauthorized
+        '500':
+          description: Internal server error
+
+  /Poll/{pollId}:
+    get:
+      tags:
+        - Polls
+      summary: Get poll details
+      description: Returns details of a specific poll including questions and options
+      operationId: getPoll
+      parameters:
+        - name: pollId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Poll ID (UUID)
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  pollId:
+                    type: string
+                  gameId:
+                    type: integer
+                  createdBy:
+                    type: string
+                  created:
+                    type: string
+                    format: date-time
+                  startDateTime:
+                    type: string
+                    format: date-time
+                  endDateTime:
+                    type: string
+                    format: date-time
+                  expireDateTime:
+                    type: string
+                    format: date-time
+                  metadata:
+                    type: string
+                  isDefinition:
+                    type: boolean
+                  totalVotes:
+                    type: integer
+                  questions:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: integer
+                        order:
+                          type: integer
+                        content:
+                          type: string
+                        type:
+                          type: string
+                          enum: [multiple-choice, text]
+                        maxOptions:
+                          type: integer
+                        userVoted:
+                          type: boolean
+                        totalVotes:
+                          type: integer
+                        options:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              id:
+                                type: integer
+                              value:
+                                type: string
+                              voteCount:
+                                type: integer
+                              userVote:
+                                type: boolean
+        '401':
+          description: Unauthorized
+        '404':
+          description: Poll not found
+        '500':
+          description: Internal server error
+
+  # Moderation
+  /textmoderation:
+    post:
+      tags:
+        - Moderation
+      summary: Text moderation
+      description: Check text content for policy violations
+      operationId: moderateText
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TextModerationRequest'
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TextModerationResponse'
+        '400':
+          description: Bad request
+        '401':
+          description: Unauthorized
+        '500':
+          description: Internal server error
+
