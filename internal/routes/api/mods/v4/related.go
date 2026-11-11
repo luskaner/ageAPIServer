@@ -1,8 +1,11 @@
 package v4
 
 import (
+	"encoding/json"
 	"net/http"
+	"strconv"
 
+	"github.com/luskaner/ageAPIServer/internal/models"
 	"github.com/luskaner/ageAPIServer/internal/routes/router"
 	"github.com/luskaner/ageAPIServer/internal/routes/shared"
 )
@@ -21,7 +24,15 @@ func Related(deps shared.Deps) http.HandlerFunc {
 			shared.WriteStoreError(w, err)
 			return
 		}
-		params := shared.SearchParams{Game: 0, Start: 1, Count: int64(len(page.Mods))}
+		// The capture echoes a fixed page of six with start 0 and the mod id as
+		// a string, unlike Find, which echoes the request it received. Its
+		// totalCount is the size of that page, not the number of candidates.
+		page.TotalCount = int64(len(page.Mods))
+		params := shared.SearchParams{
+			Start: 0,
+			Count: models.RelatedPageSize,
+			ModID: json.RawMessage(strconv.Quote(strconv.FormatInt(modID, 10))),
+		}
 		shared.WriteJSON(w, http.StatusOK, shared.NewModList(params, page, viewer.LoggedOn))
 	}
 }

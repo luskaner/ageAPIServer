@@ -307,8 +307,12 @@ components:
           type: boolean
         errorCode:
           type: integer
+          description: |
+            -1 on success. Every capture of a list endpoint carries it, even
+            when the response returns data.
         errorMessage:
           type: string
+          description: Empty on success.
 
     SearchParams:
       type: object
@@ -586,34 +590,18 @@ components:
           $ref: '#/components/schemas/Ratings'
 
     Ratings:
+      description: |
+        Rating aggregate of a mod. The captures of November 2026 carry only
+        average and totalCount: the per-star counters and the two
+        favourable-review blocks of the August captures are gone. The block is
+        always an object, even when the mod has no ratings.
       type: object
       properties:
-        leastFavorableReview:
-          type: object
-          nullable: true
-        mostFavorableReview:
-          type: object
-          nullable: true
         rating:
           type: object
           properties:
             average:
               type: number
-            count1Star:
-              type: integer
-              nullable: true
-            count2Star:
-              type: integer
-              nullable: true
-            count3Star:
-              type: integer
-              nullable: true
-            count4Star:
-              type: integer
-              nullable: true
-            count5Star:
-              type: integer
-              nullable: true
             totalCount:
               type: integer
         reviewsCount:
@@ -1457,6 +1445,8 @@ paths:
                           type: string
                   totalCount:
                     type: integer
+                    nullable: true
+                    description: Null when the mod has no reviews.
         '401':
           description: Unauthorized
         '500':

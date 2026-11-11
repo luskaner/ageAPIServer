@@ -453,12 +453,7 @@ func (s *ModStore) tagsFor(ctx context.Context, ids []int64) (map[int64][]ModTag
 }
 
 func (s *ModStore) ratingsFor(ctx context.Context, ids []int64) (map[int64]*Ratings, error) {
-	query := `SELECT modId, COUNT(*), AVG(rating),
-			SUM(CASE WHEN rating = 1 THEN 1 ELSE 0 END),
-			SUM(CASE WHEN rating = 2 THEN 1 ELSE 0 END),
-			SUM(CASE WHEN rating = 3 THEN 1 ELSE 0 END),
-			SUM(CASE WHEN rating = 4 THEN 1 ELSE 0 END),
-			SUM(CASE WHEN rating = 5 THEN 1 ELSE 0 END)
+	query := `SELECT modId, COUNT(*), AVG(rating)
 		FROM mod_ratings WHERE modId IN (` + placeholders(len(ids)) + `) GROUP BY modId`
 	rows, err := s.db.QueryContext(ctx, query, argsFor(ids)...)
 	if err != nil {
@@ -471,18 +466,12 @@ func (s *ModStore) ratingsFor(ctx context.Context, ids []int64) (map[int64]*Rati
 		var modID int64
 		var total int64
 		var average float64
-		var one, two, three, four, five int64
-		if err := rows.Scan(&modID, &total, &average, &one, &two, &three, &four, &five); err != nil {
+		if err := rows.Scan(&modID, &total, &average); err != nil {
 			return nil, fmt.Errorf("scan ratings: %w", err)
 		}
 		ratings[modID] = &Ratings{
 			Rating: RatingBreakdown{
 				Average:    average,
-				Count1Star: &one,
-				Count2Star: &two,
-				Count3Star: &three,
-				Count4Star: &four,
-				Count5Star: &five,
 				TotalCount: total,
 			},
 		}
@@ -638,7 +627,7 @@ func (r modRow) toMod(state viewerState, ratings *Ratings, images []Image, tags 
 		Downloads:         nullInt(r.downloads),
 		Installs:          nullInt(r.installs),
 		Likes:             nullInt(r.likes),
-		Ratings:           ratings,
+		Ratings:           ratingsOrZero(ratings),
 		CurrentRating:     r.currentRating.Float64,
 		PositiveRatings:   r.positiveRatings.Int64,
 		TotalRatings:      r.totalRatings.Int64,
@@ -708,7 +697,7 @@ func (r modRow) toDetail(state viewerState, ratings *Ratings, images []Image, ta
 		Downloads:         nullInt(r.downloads),
 		Installs:          nullInt(r.installs),
 		Likes:             nullInt(r.likes),
-		Ratings:           ratings,
+		Ratings:           ratingsOrZero(ratings),
 		CurrentRating:     r.currentRating.Float64,
 		PositiveRatings:   r.positiveRatings.Int64,
 		TotalRatings:      r.totalRatings.Int64,
@@ -800,6 +789,10 @@ func (s *ModStore) Detail(ctx context.Context, modID int64, viewer Viewer) (*Det
 	return &detail, nil
 }
 
+// RelatedPageSize is how many related mods the endpoint returns. The captures
+// always carry six, and their totalCount is that same six.
+const RelatedPageSize = 6
+
 // Related returns mods of the same game sharing at least one tag, falling back
 // to the same game when there is no shared tag.
 func (s *ModStore) Related(ctx context.Context, modID int64, viewer Viewer) (*ModPage, error) {
@@ -817,8 +810,8 @@ func (s *ModStore) Related(ctx context.Context, modID int64, viewer Viewer) (*Mo
 		  AND EXISTS (SELECT 1 FROM mod_tag_map mine
 		              JOIN mod_tag_map theirs ON theirs.gameTitleId = mine.gameTitleId AND theirs.modTypeId = mine.modTypeId
 		              WHERE mine.modId = ? AND theirs.modId = m.modId)
-		ORDER BY m.popular DESC, m.modId DESC LIMIT 30`
-	rows, err := s.db.QueryContext(ctx, query, gameTitleID, modID, modID)
+		ORDER BY m.popular DESC, m.modId DESC LIMIT ?`
+	rows, err := s.db.QueryContext(ctx, query, gameTitleID, modID, modID, RelatedPageSize)
 	if err != nil {
 		return nil, fmt.Errorf("query related mods: %w", err)
 	}
@@ -828,8 +821,8 @@ func (s *ModStore) Related(ctx context.Context, modID int64, viewer Viewer) (*Mo
 	}
 	if len(scanned) == 0 {
 		fallback := baseSelect + ` WHERE m.gameTitleId = ? AND m.modId <> ?
-			ORDER BY m.popular DESC, m.modId DESC LIMIT 30`
-		rows, err = s.db.QueryContext(ctx, fallback, gameTitleID, modID)
+			ORDER BY m.popular DESC, m.modId DESC LIMIT ?`
+		rows, err = s.db.QueryContext(ctx, fallback, gameTitleID, modID, RelatedPageSize)
 		if err != nil {
 			return nil, fmt.Errorf("query related fallback: %w", err)
 		}

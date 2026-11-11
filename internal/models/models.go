@@ -124,23 +124,18 @@ type Image struct {
 	ImageFileSize  *float64 `json:"imageFileSize"`
 }
 
-// RatingBreakdown is the rating object of the Ratings schema.
+// RatingBreakdown is the rating object of the Ratings schema. The captures of
+// November 2026 carry only average and totalCount: the per-star counters and
+// the two favourable-review blocks of the August captures are gone.
 type RatingBreakdown struct {
 	Average    float64 `json:"average"`
-	Count1Star *int64  `json:"count1Star"`
-	Count2Star *int64  `json:"count2Star"`
-	Count3Star *int64  `json:"count3Star"`
-	Count4Star *int64  `json:"count4Star"`
-	Count5Star *int64  `json:"count5Star"`
 	TotalCount int64   `json:"totalCount"`
 }
 
 // Ratings is the aggregate block embedded in a mod and returned by Rate.
 type Ratings struct {
-	LeastFavorableReview json.RawMessage `json:"leastFavorableReview"`
-	MostFavorableReview  json.RawMessage `json:"mostFavorableReview"`
-	Rating               RatingBreakdown `json:"rating"`
-	ReviewsCount         int64           `json:"reviewsCount"`
+	Rating       RatingBreakdown `json:"rating"`
+	ReviewsCount int64           `json:"reviewsCount"`
 }
 
 // Mod is the ModMetaData schema: one entry of modList.
@@ -182,7 +177,7 @@ type Mod struct {
 	Installs          *int64          `json:"installs"`
 	Likes             *int64          `json:"likes"`
 	UserLiked         *bool           `json:"userLiked"`
-	Ratings           *Ratings        `json:"ratings"`
+	Ratings           Ratings         `json:"ratings"`
 	CurrentRating     float64         `json:"currentRating"`
 	UserDownloaded    *bool           `json:"userDownloaded"`
 	UserInstalled     bool            `json:"userInstalled"`
@@ -239,7 +234,7 @@ type Detail struct {
 	Installs          *int64          `json:"installs"`
 	Likes             *int64          `json:"likes"`
 	UserLiked         *bool           `json:"userLiked"`
-	Ratings           *Ratings        `json:"ratings"`
+	Ratings           Ratings         `json:"ratings"`
 	CurrentRating     float64         `json:"currentRating"`
 	UserDownloaded    *bool           `json:"userDownloaded"`
 	UserInstalled     *bool           `json:"userInstalled"`
@@ -374,6 +369,15 @@ func nullFloat(value sql.NullFloat64) *float64 {
 	}
 	out := value.Float64
 	return &out
+}
+
+// ratingsOrZero keeps the ratings block an object even when the mod has no
+// ratings: every capture carries one, with average and totalCount at zero.
+func ratingsOrZero(ratings *Ratings) Ratings {
+	if ratings == nil {
+		return Ratings{}
+	}
+	return *ratings
 }
 
 // nullBool converts a nullable 0/1 column to a pointer.

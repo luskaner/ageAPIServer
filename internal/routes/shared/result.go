@@ -42,15 +42,20 @@ type SearchParams struct {
 	ModID   json.RawMessage `json:"modid"`
 }
 
-// ModList is the body of every list endpoint.
+// ModList is the body of every list endpoint. errorCode is -1 and errorMessage
+// is empty on success: that is what every capture carries, including the ones
+// that return data.
 type ModList struct {
 	SearchParams SearchParams `json:"searchParams"`
 	ModList      []models.Mod `json:"modList"`
 	TotalCount   *int64       `json:"totalCount"`
 	IsLoggedOn   bool         `json:"isLoggedOn"`
-	ErrorCode    int64        `json:"errorCode,omitempty"`
-	ErrorMessage string       `json:"errorMessage,omitempty"`
+	ErrorCode    int64        `json:"errorCode"`
+	ErrorMessage string       `json:"errorMessage"`
 }
+
+// noErrorCode is the errorCode of a successful list response.
+const noErrorCode = -1
 
 // NewModList wraps a page of mods.
 func NewModList(params SearchParams, page *models.ModPage, loggedOn bool) ModList {
@@ -64,6 +69,7 @@ func NewModList(params SearchParams, page *models.ModPage, loggedOn bool) ModLis
 		ModList:      mods,
 		TotalCount:   &total,
 		IsLoggedOn:   loggedOn,
+		ErrorCode:    noErrorCode,
 	}
 }
 

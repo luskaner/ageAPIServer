@@ -154,9 +154,45 @@ exceptions, because they are infrastructure rather than endpoints.
    working assumption, kept as a Go constant so it can be corrected without a
    migration.
 
+## Upstream drift between the August and November captures
+
+The captures in the `api_web` log folder come from two sessions, 2026-08-09 and
+2026-11-11. Comparing them field by field shows that the service changed the
+`ratings` block in between, and the November shape is the one this server
+implements:
+
+| Field | August | November |
+|---|---|---|
+| `ratings.leastFavorableReview` | object or null | gone |
+| `ratings.mostFavorableReview` | object or null | gone |
+| `ratings.rating.count1Star`..`count5Star` | integer or null | gone |
+| `ratings.rating.average`, `totalCount` | present | present |
+| `modList[].metaData` | the whole mod nested | null |
+
+Everything else is identical: the 52 keys of a mod entry, the `searchParams`
+echo and the `errorCode`/`errorMessage` pair. Three details of the November
+captures are easy to miss and are pinned by tests:
+
+- `ratings` is always an object, even for a mod with no ratings, where it is
+  `{"rating":{"average":0,"totalCount":0},"reviewsCount":0}`.
+- Every list response carries `errorCode: -1` and `errorMessage: ""`, including
+  the ones that return data.
+- `Reviews` answers `totalCount: null` when the mod has no reviews, and `Rate`
+  answers `statusCode: null` and `responseMessage: null`.
+
+`Related` is a fixed page: `start` 0, `count` 6, `modid` as a string and a
+`totalCount` equal to the size of that page, unlike `Find`, which echoes the
+request it received.
+
+Two deviations are deliberate. `isLoggedOn` reports the real session on the list
+endpoints, where every capture says `false` even for `My` and `Installed` called
+with a valid cookie; reporting the truth is a superset of that. And `createDate`
+is stored and emitted as RFC 3339 (`2026-11-11T20:41:14Z`) where the capture
+carries `2026-11-11T20:41:14.543`, the same instant without the zone marker.
+
 ## Database compatibility
 
-`schemaVersion` is 2. `Migrate` only creates missing objects, so a database
+`schemaVersion` is 3. `Migrate` only creates missing objects, so a database
 created with the previous single-column `mod_types` key is not upgraded: the
 seed detects the partial catalog and refuses to start, asking for the file to be
 deleted. There is no data to preserve in a fresh deployment.

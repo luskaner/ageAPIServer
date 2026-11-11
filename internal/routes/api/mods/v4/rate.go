@@ -9,7 +9,8 @@ import (
 	"github.com/luskaner/ageAPIServer/internal/routes/shared"
 )
 
-// RateResponse is the body of Rate.
+// RateResponse is the body of Rate. The capture carries statusCode and
+// responseMessage as null, so they stay nil.
 type RateResponse struct {
 	StatusCode      *int64          `json:"statusCode"`
 	ResponseMessage *string         `json:"responseMessage"`
@@ -37,12 +38,6 @@ func Rate(deps shared.Deps) http.HandlerFunc {
 			return
 		}
 
-		status := int64(http.StatusOK)
-		message := "OK"
-		shared.WriteJSON(w, http.StatusOK, RateResponse{
-			StatusCode:      &status,
-			ResponseMessage: &message,
-			PlayFabResponse: ratings,
-		})
+		shared.WriteJSON(w, http.StatusOK, RateResponse{PlayFabResponse: ratings})
 	}
 }

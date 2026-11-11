@@ -75,17 +75,12 @@ func (s *RatingStore) Recompute(ctx context.Context, modID int64) (*Ratings, err
 func recomputeTx(ctx context.Context, tx *sql.Tx, modID int64) (*Ratings, error) {
 	var total int64
 	var average sql.NullFloat64
-	var one, two, three, four, five, positive sql.NullInt64
+	var positive sql.NullInt64
 	err := tx.QueryRowContext(ctx,
 		`SELECT COUNT(*), AVG(rating),
-			SUM(CASE WHEN rating = 1 THEN 1 ELSE 0 END),
-			SUM(CASE WHEN rating = 2 THEN 1 ELSE 0 END),
-			SUM(CASE WHEN rating = 3 THEN 1 ELSE 0 END),
-			SUM(CASE WHEN rating = 4 THEN 1 ELSE 0 END),
-			SUM(CASE WHEN rating = 5 THEN 1 ELSE 0 END),
 			SUM(CASE WHEN rating >= 4 THEN 1 ELSE 0 END)
 		 FROM mod_ratings WHERE modId = ?`, modID).
-		Scan(&total, &average, &one, &two, &three, &four, &five, &positive)
+		Scan(&total, &average, &positive)
 	if err != nil {
 		return nil, fmt.Errorf("aggregate ratings: %w", err)
 	}
@@ -106,11 +101,6 @@ func recomputeTx(ctx context.Context, tx *sql.Tx, modID int64) (*Ratings, error)
 	return &Ratings{
 		Rating: RatingBreakdown{
 			Average:    average.Float64,
-			Count1Star: nullInt(one),
-			Count2Star: nullInt(two),
-			Count3Star: nullInt(three),
-			Count4Star: nullInt(four),
-			Count5Star: nullInt(five),
 			TotalCount: total,
 		},
 		ReviewsCount: reviewsCount,

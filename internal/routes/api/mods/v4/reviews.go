@@ -8,11 +8,12 @@ import (
 	"github.com/luskaner/ageAPIServer/internal/routes/shared"
 )
 
-// ReviewsResponse is the body of Reviews.
+// ReviewsResponse is the body of Reviews. The capture carries totalCount as
+// null when the mod has no reviews, so it is a pointer.
 type ReviewsResponse struct {
 	ContinuationToken *string         `json:"continuationToken"`
 	Reviews           []models.Review `json:"reviews"`
-	TotalCount        int64           `json:"totalCount"`
+	TotalCount        *int64          `json:"totalCount"`
 }
 
 // Reviews serves POST /api/v4/mods/Reviews. `ratingNum` is passed through
@@ -41,6 +42,10 @@ func Reviews(deps shared.Deps) http.HandlerFunc {
 			shared.WriteStoreError(w, err)
 			return
 		}
-		shared.WriteJSON(w, http.StatusOK, ReviewsResponse{Reviews: reviews, TotalCount: total})
+		response := ReviewsResponse{Reviews: reviews}
+		if total > 0 {
+			response.TotalCount = &total
+		}
+		shared.WriteJSON(w, http.StatusOK, response)
 	}
 }
