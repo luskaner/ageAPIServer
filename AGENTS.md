@@ -4,7 +4,7 @@ Guidance for coding agents working in this repository.
 
 ## What this is
 
-`ageAPIServer` is a Go implementation of the Age of Empires Mods API v3.2.0
+`ageAPIServer` is a Go implementation of the Age of Empires Mods API 1.0.0
 (`api_spec.yml`) backed by SQLite. It ships as a standalone binary
 (`cmd/ageAPIServer`) and as an embeddable `net/http` handler (the root
 package). The wire contract is the official service: responses are matched

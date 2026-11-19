@@ -1,6 +1,6 @@
 # ageAPIServer
 
-Go implementation of the **Age of Empires API v3.2.0** (`api_spec.yml`)
+Go implementation of the **Age of Empires Mods API 1.0.0** (`api_spec.yml`;
 backed by SQLite. It runs as a standalone binary and mounts as one more route in
 any existing `net/http` application.
 
