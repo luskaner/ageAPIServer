@@ -51,3 +51,30 @@ RequireForReadOnly = false
 # Where Publish writes the mod archive and its screenshots. Empty rejects any
 # publish that carries a file.
 UploadDir = "uploads"
+
+# CONFIGURING CUSTOM FILES
+# Serves the /api/MatchContent endpoints used by the game to upload and
+# download multiplayer savegames and replays. Without it, restoring a saved
+# multiplayer game fails with "Failed to upload/download custom files".
+[MatchContent]
+
+# Whether to enable the endpoints. When disabled the routes answer 404.
+Enabled = true
+
+# Folder where the files are stored. "auto" means
+# <TEMP>/ageAPIServer/custom-files (Unix: /tmp/ageAPIServer/custom-files).
+Folder = "auto"
+
+# Maximum size of a single file in bytes. Long matches and custom content can
+# make a savegame several MB. The global [Server] MaxBodyBytes cap is skipped
+# for this prefix, so this is the limit that applies.
+MaxFileSize = 33554432
+
+# Maximum accumulated size in bytes. When exceeded, the oldest files are
+# evicted first.
+MaxTotalSize = 268435456
+
+# How long a file is kept since its upload. Accepts Go durations (12h, 30m,
+# 1h30m). Files are also purged at startup if older than this. 0 keeps them
+# until they are evicted.
+Expiry = "12h"

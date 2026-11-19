@@ -3,6 +3,8 @@ package shared
 import (
 	"encoding/json"
 	"errors"
+	"strconv"
+	"strings"
 
 	"github.com/luskaner/ageAPIServer/internal/models"
 )
@@ -170,6 +172,43 @@ func (r FindRequestV1) ToFilter(p Pagination, d FilterDefaults) models.FindFilte
 
 // SearchParams echoes the request. `status` and `tags` are not part of the
 // schema, so they cannot be echoed; `modid` keeps the shape the client used.
+// WithEchoDefaults returns a copy of the request with the endpoint defaults
+// filled in. The searchParams echo of every list endpoint shows the resolved
+// values, not the raw body: the AOE3 My answers creator=caller and count 10,
+// its Installed answers creator="" and count 1000, and the Featured capture
+// answers sort recentpopular and count 3, all of them for requests that only
+// carried game.
+func (r FindRequest) WithEchoDefaults(sort string, order string, count int64, creator *string) FindRequest {
+	if r.Sort == "" {
+		r.Sort = sort
+	}
+	if r.Order == "" {
+		r.Order = order
+	}
+	if !r.Count.Set && count > 0 {
+		r.Count = OptInt{Value: count, Set: true}
+	}
+	if r.Creator == nil && creator != nil {
+		r.Creator = creator
+	}
+	return r
+}
+
+// modIDEcho is the modid of the echo. The captures always render it as the
+// JSON string of the number: the web Find sends the numeric 0 and the answer
+// carries "0"; the game clients omit the field and the answer still carries
+// "0". The legacy v1 echo keeps null for the empty value, as its captures
+// show.
+func modIDEcho(raw FlexInt, unset json.RawMessage) json.RawMessage {
+	if raw.IsString {
+		if len(raw.Raw) == 0 {
+			return unset
+		}
+		return raw.Raw
+	}
+	return json.RawMessage(strconv.Quote(strconv.FormatInt(raw.Value, 10)))
+}
+
 func (r FindRequest) SearchParams() SearchParams {
 	params := SearchParams{
 		Q:      stringPtr(r.Q),
@@ -177,7 +216,7 @@ func (r FindRequest) SearchParams() SearchParams {
 		Start:  r.Start.OrDefault(1),
 		Count:  r.Count.Value,
 		Game:   r.Game,
-		ModID:  r.ModID.Raw,
+		ModID:  modIDEcho(r.ModID, json.RawMessage(`"0"`)),
 	}
 	if r.Creator != nil {
 		params.Creator = r.Creator
@@ -187,7 +226,9 @@ func (r FindRequest) SearchParams() SearchParams {
 		params.Sort = &sort
 	}
 	if r.Order != "" {
-		order := r.Order
+		// The echo upper-cases the order: the AOE3 Find sends "desc" and the
+		// answer carries "DESC", matching the web captures that send "DESC".
+		order := strings.ToUpper(r.Order)
 		params.Order = &order
 	}
 	return params

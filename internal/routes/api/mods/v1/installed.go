@@ -35,6 +35,6 @@ func Installed(deps shared.Deps) http.HandlerFunc {
 			shared.WriteStoreError(w, err)
 			return
 		}
-		shared.WriteJSON(w, http.StatusOK, shared.NewModList(request.SearchParams(), page, viewer.LoggedOn))
+		shared.WriteJSON(w, http.StatusOK, shared.NewLegacyModList(r, deps, request.SearchParams(), page, viewer.LoggedOn, true))
 	}
 }

@@ -9,7 +9,9 @@ import (
 )
 
 // Featured serves POST /api/v4/mods/Featured. The AOM client sends only
-// `{"game":1001}`, so every other field falls back to the schema default.
+// `{"game":1001}` and the echo resolves to sort popular and count 10; the
+// website sends its sort, count and filters explicitly and echoes them as
+// sent. The rows carry the featured status 5, which the store filter picks.
 func Featured(deps shared.Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var request shared.FindRequest
@@ -24,9 +26,9 @@ func Featured(deps shared.Deps) http.HandlerFunc {
 
 		viewer := router.ViewerFrom(r)
 		filter := request.ToFilter(deps.Pagination, shared.FilterDefaults{
-			Sort:  "recentpopular",
+			Sort:  "popular",
 			Order: "desc",
-			Count: 3,
+			Count: 10,
 		})
 		filter.FeaturedOnly = true
 
@@ -35,6 +37,11 @@ func Featured(deps shared.Deps) http.HandlerFunc {
 			shared.WriteStoreError(w, err)
 			return
 		}
-		shared.WriteJSON(w, http.StatusOK, shared.NewModList(request.SearchParams(), page, viewer.LoggedOn))
+		// The echo carries the resolved filter: the AOM capture resolves
+		// sort popular and count 10 for a body that only carried the game,
+		// with the creator null (only Installed answers "" and only My the
+		// caller).
+		echo := request.WithEchoDefaults("popular", "desc", 10, nil)
+		shared.WriteJSON(w, http.StatusOK, shared.NewModList(r, deps, echo.SearchParams(), page, viewer.LoggedOn))
 	}
 }

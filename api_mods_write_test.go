@@ -282,8 +282,8 @@ func TestPublishCreatesAMod(t *testing.T) {
 	if got.ModName != "The Roman Dawn" || got.GameTitleID != 2 {
 		t.Fatalf("detail = %+v", got)
 	}
-	if got.ModStatusID != 3 {
-		t.Fatalf("modStatusId = %d, want 3 for Unlisted", got.ModStatusID)
+	if got.ModStatusID != 2 {
+		t.Fatalf("modStatusId = %d, want 2 (Published) for Unlisted", got.ModStatusID)
 	}
 	if got.ModVisibility == nil || *got.ModVisibility != "Unlisted" {
 		t.Fatalf("modVisibility = %v", got.ModVisibility)
@@ -337,14 +337,15 @@ func TestPublishUpdatesAMod(t *testing.T) {
 	if got.ModName != "Renamed" {
 		t.Fatalf("modName = %q", got.ModName)
 	}
-	if got.ModStatusID != 4 {
-		t.Fatalf("modStatusId = %d, want 4 for Private", got.ModStatusID)
+	if got.ModStatusID != 2 {
+		t.Fatalf("modStatusId = %d, want 2 (Published) for Private", got.ModStatusID)
 	}
 	if len(got.ModTagIDs) != 1 || got.ModTagIDs[0] != 16 {
 		t.Fatalf("modTagIds = %v", got.ModTagIDs)
 	}
-	// The image had no upload, so the client thumbnail is kept.
-	if len(got.ImageURLs) != 1 || got.ImageURLs[0].ImageThumbnail != "kept.png" {
+	// The image had no upload, so the client thumbnail is kept. The response
+	// carries it as an absolute URL of the media route.
+	if len(got.ImageURLs) != 1 || !strings.HasSuffix(got.ImageURLs[0].ImageThumbnail, "/kept.png") {
 		t.Fatalf("imageUrls = %+v", got.ImageURLs)
 	}
 }

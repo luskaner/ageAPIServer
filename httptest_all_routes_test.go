@@ -10,6 +10,9 @@ import (
 func routePath(path string) string {
 	path = strings.ReplaceAll(path, "{modid}", "1")
 	path = strings.ReplaceAll(path, "{pollid}", "11111111-1111-1111-1111-111111111111")
+	path = strings.ReplaceAll(path, "{name}", "missing.png")
+	path = strings.ReplaceAll(path, "{matchid}", "1")
+	path = strings.ReplaceAll(path, "{hash}", "missing")
 	return path
 }
 

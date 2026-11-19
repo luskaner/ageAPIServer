@@ -256,7 +256,8 @@ func TestRelatedRejectsBadInput(t *testing.T) {
 	}
 
 	recorder = do(t, handler, http.MethodGet, "/api/v4/mods/Related/999", "", nil)
-	if recorder.Code != http.StatusNotFound {
-		t.Fatalf("unknown mod: code = %d, want 404", recorder.Code)
+	if recorder.Code != http.StatusNoContent {
+		// The capture of a deleted mod answers 204 instead of an error.
+		t.Fatalf("unknown mod: code = %d, want 204", recorder.Code)
 	}
 }

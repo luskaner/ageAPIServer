@@ -4,13 +4,16 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 )
 
 // schemaVersion is bumped whenever schemaSQL changes. Migrate applies the whole
 // script with CREATE TABLE IF NOT EXISTS, so an existing database only gains
-// the missing objects; a change to an existing table needs the file recreated.
-const schemaVersion = 3
+// the missing objects; a change to an existing table needs the ALTER TABLE of
+// the matching migration below (version 6 widens subscriptions, version 7
+// rebuilds mods for the Featured status 5 the AOM captures carry).
+const schemaVersion = 7
 
 // SystemStore owns the schema and the health check.
 type SystemStore struct {
@@ -68,7 +71,7 @@ CREATE TABLE IF NOT EXISTS mods (
   verifiedVersion   TEXT,
   modTypeId         INTEGER,
   clientId          TEXT,
-  modStatusId       INTEGER NOT NULL CHECK (modStatusId BETWEEN 1 AND 4),
+  modStatusId       INTEGER NOT NULL CHECK (modStatusId BETWEEN 1 AND 5),
   modStatusMessage  TEXT,
   modVisibility     TEXT NOT NULL DEFAULT 'Public'
                     CHECK (modVisibility IN ('Public','Private','Unlisted')),
@@ -94,8 +97,10 @@ CREATE TABLE IF NOT EXISTS mods (
   currentRating     REAL NOT NULL DEFAULT 0,
   positiveRatings   INTEGER NOT NULL DEFAULT 0,
   totalRatings      INTEGER NOT NULL DEFAULT 0,
-  reviewsCount      INTEGER NOT NULL DEFAULT 0,
-  FOREIGN KEY (gameTitleId, modTypeId) REFERENCES mod_types(gameTitleId, modTypeId)
+  reviewsCount      INTEGER NOT NULL DEFAULT 0
+  -- No foreign key to mod_types: the live Create accepts a modTypeId the
+  -- Tags catalog does not sell (the capture created game 2 with ModType 1),
+  -- so the reference is a join hint, not a constraint.
 );
 CREATE INDEX IF NOT EXISTS idx_mods_game     ON mods(gameTitleId);
 CREATE INDEX IF NOT EXISTS idx_mods_status   ON mods(modStatusId);
@@ -121,9 +126,12 @@ CREATE TABLE IF NOT EXISTS mod_tag_map (
   modId      INTEGER NOT NULL REFERENCES mods(modId) ON DELETE CASCADE,
   gameTitleId INTEGER NOT NULL,
   modTypeId  INTEGER NOT NULL,
-  PRIMARY KEY (modId, modTypeId),
-  FOREIGN KEY (gameTitleId, modTypeId) REFERENCES mod_types(gameTitleId, modTypeId)
+  PRIMARY KEY (modId, modTypeId)
 );
+-- The map carries no foreign key to mod_types on purpose: the AOE4 capture
+-- attaches the auto tag 26 to a game whose Tags catalog has no 26 and still
+-- renders the id (the modTagNames array skips the unresolvable entries), and
+-- a foreign key would erase tree ids the upstream keeps.
 CREATE INDEX IF NOT EXISTS idx_mod_tag_map_type ON mod_tag_map(gameTitleId, modTypeId);
 
 CREATE TABLE IF NOT EXISTS mod_ratings (
@@ -165,6 +173,10 @@ CREATE TABLE IF NOT EXISTS subscriptions (
   modId         INTEGER NOT NULL REFERENCES mods(modId) ON DELETE CASCADE,
   downloadedAt  TEXT,
   installedAt   TEXT,
+  -- installedVersion records the mod version this user last installed, so a
+  -- later publish of a newer version flags updateAvailable. NULL - the rows
+  -- the capture seeds carry - never flags one.
+  installedVersion REAL,
   -- downloadCounted records that this user already contributed to
   -- mods.downloads, so Subscribe followed by Download counts once.
   downloadCounted INTEGER NOT NULL DEFAULT 0,
@@ -192,6 +204,14 @@ CREATE TABLE IF NOT EXISTS mod_reports (
   createdAt           TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
 );
 CREATE INDEX IF NOT EXISTS idx_mod_reports_mod ON mod_reports(modId);
+
+-- Monotonic allocator of the locally published mod id band. Single row
+-- (id = 1); Publish seeds it lazily with LocalModIDFloor. It only ever
+-- advances: deleting a mod never frees its id.
+CREATE TABLE IF NOT EXISTS mod_id_allocator (
+  id        INTEGER PRIMARY KEY CHECK (id = 1),
+  nextModId INTEGER NOT NULL CHECK (nextModId > 0)
+);
 
 CREATE TABLE IF NOT EXISTS polls (
   pollId          TEXT PRIMARY KEY,
@@ -244,6 +264,24 @@ func (s *SystemStore) Migrate() error {
 	if err != nil {
 		return fmt.Errorf("read schema version: %w", err)
 	}
+	if current < 6 {
+		// The installed versions are new: the column starts empty and renders
+		// no update flag until a subscriber re-installs or the mod updates.
+		if _, err := s.db.Exec(`ALTER TABLE subscriptions ADD COLUMN installedVersion REAL`); err != nil &&
+			!strings.Contains(err.Error(), "duplicate column name") {
+			return fmt.Errorf("widen subscriptions: %w", err)
+		}
+	}
+	if current < 7 {
+		// The mods.check of the status widens from 1-4 to 1-5 (the live
+		// "Featured"), which SQLite can only change through a rebuild. The
+		// rows carry the status they already had; the drop of the old table
+		// happens inside the transaction so nothing runs against a missing
+		// table.
+		if err := s.rebuildModsForStatus5(); err != nil {
+			return err
+		}
+	}
 	if current >= schemaVersion {
 		return nil
 	}
@@ -251,6 +289,70 @@ func (s *SystemStore) Migrate() error {
 		schemaVersion, time.Now().UTC().Format(time.RFC3339))
 	if err != nil {
 		return fmt.Errorf("record schema version: %w", err)
+	}
+	return nil
+}
+
+// rebuildModsForStatus5 recreates mods with the widened status check and
+// repoints the indexes, the SQLite recipe for a constraint change: copy, drop,
+// rename - all inside one transaction with the foreign keys off, because the
+// children (tags, reviews, ratings, ...) reference this table by name and
+// re-attach when the rebuilt table takes its name back.
+func (s *SystemStore) rebuildModsForStatus5() error {
+	script := `
+PRAGMA foreign_keys=OFF;
+BEGIN;
+CREATE TABLE mods_status5 (
+  modId             INTEGER PRIMARY KEY,
+  gameTitleId       INTEGER NOT NULL REFERENCES games(gameTitleId),
+  modName           TEXT NOT NULL,
+  description       TEXT,
+  modDescription    TEXT,
+  changeList        TEXT,
+  modVersion        REAL NOT NULL DEFAULT 0,
+  verifiedVersion   TEXT,
+  modTypeId         INTEGER,
+  clientId          TEXT,
+  modStatusId       INTEGER NOT NULL CHECK (modStatusId BETWEEN 1 AND 5),
+  modStatusMessage  TEXT,
+  modVisibility     TEXT NOT NULL DEFAULT 'Public'
+                    CHECK (modVisibility IN ('Public','Private','Unlisted')),
+  creatorId         INTEGER REFERENCES users(userId),
+  createDate        TEXT NOT NULL,
+  lastUpdate        TEXT NOT NULL,
+  updateAvailable   INTEGER NOT NULL DEFAULT 0,
+  popular           INTEGER NOT NULL DEFAULT 0,
+  thirtyDayPopular  INTEGER NOT NULL DEFAULT 0,
+  downloads         INTEGER NOT NULL DEFAULT 0,
+  installs          INTEGER NOT NULL DEFAULT 0,
+  likes             INTEGER NOT NULL DEFAULT 0,
+  sortName          TEXT,
+  sendNotifications INTEGER NOT NULL DEFAULT 0,
+  allowDiscussion   INTEGER NOT NULL DEFAULT 0,
+  discourseUrl      TEXT,
+  thumbnail         TEXT,
+  fileUrl           TEXT,
+  fileCRC           TEXT,
+  modFileSize       REAL,
+  modDiskSize       REAL,
+  metaData          TEXT,
+  currentRating     REAL NOT NULL DEFAULT 0,
+  positiveRatings   INTEGER NOT NULL DEFAULT 0,
+  totalRatings      INTEGER NOT NULL DEFAULT 0,
+  reviewsCount      INTEGER NOT NULL DEFAULT 0
+);
+INSERT INTO mods_status5 SELECT * FROM mods;
+DROP TABLE mods;
+ALTER TABLE mods_status5 RENAME TO mods;
+CREATE INDEX IF NOT EXISTS idx_mods_game     ON mods(gameTitleId);
+CREATE INDEX IF NOT EXISTS idx_mods_status   ON mods(modStatusId);
+CREATE INDEX IF NOT EXISTS idx_mods_type     ON mods(modTypeId);
+CREATE INDEX IF NOT EXISTS idx_mods_creator  ON mods(creatorId);
+COMMIT;
+PRAGMA foreign_keys=ON;
+`
+	if _, err := s.db.Exec(script); err != nil {
+		return fmt.Errorf("rebuild mods for status 5: %w", err)
 	}
 	return nil
 }

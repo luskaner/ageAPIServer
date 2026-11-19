@@ -4,6 +4,7 @@ package textmoderation
 
 import (
 	"net/http"
+	"strings"
 
 	i "github.com/luskaner/ageAPIServer/internal"
 	"github.com/luskaner/ageAPIServer/internal/routes/shared"
@@ -19,6 +20,16 @@ type Response struct {
 	TranslationAvailable bool   `json:"translationAvailable"`
 	ModeratedText        string `json:"moderatedText"`
 	Language             string `json:"language"`
+}
+
+// baseLanguage drops the region of an input language tag: the upstream answer
+// carries the detected language ("en" for "Test Mod" even with "es-ES" as the
+// input) and the base tag is the closest deterministic value.
+func baseLanguage(tag string) string {
+	if base, _, found := strings.Cut(tag, "-"); found {
+		return base
+	}
+	return tag
 }
 
 // TextModeration serves POST /textmoderation. The upstream answers Allow for
@@ -43,7 +54,10 @@ func TextModeration(_ shared.Deps) http.HandlerFunc {
 			MaturePlusResult:     "Allow",
 			TranslationAvailable: false,
 			ModeratedText:        request.TextContent,
-			Language:             request.Language,
+			// The answer carries the detected language, not the echo of the
+			// request: the captures answer "en" for "Test Mod" whatever the
+			// input language was. The base subtag is the deterministic stand-in.
+			Language: baseLanguage(request.Language),
 		})
 	}
 }

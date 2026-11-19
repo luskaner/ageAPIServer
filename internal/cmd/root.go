@@ -49,6 +49,11 @@ func Execute() (error, int) {
 	fs.Int("pagination.defaultCount", 0, "default page size")
 	fs.Int("pagination.maxCount", 0, "maximum page size")
 	fs.String("storage.uploaddir", "", "directory for published mod files")
+	fs.Bool("matchcontent.enabled", true, "serve the /api/MatchContent endpoints")
+	fs.String("matchcontent.folder", "", "directory for match savegames and replays")
+	fs.Int64("matchcontent.maxfilesize", 0, "maximum size of one match file in bytes")
+	fs.Int64("matchcontent.maxtotalsize", 0, "maximum accumulated size of match files in bytes")
+	fs.String("matchcontent.expiry", "", "lifetime of a match file")
 	fs.String("new-session", "", "print a session cookie value for a Steam token and exit")
 
 	if err := fs.Parse(os.Args[1:]); err != nil {
@@ -108,6 +113,13 @@ func runRoot(fs *pflag.FlagSet) (error, int) {
 		},
 		RequireAuthForReadOnly: cfg.Auth.RequireForReadOnly,
 		UploadDir:              cfg.Storage.UploadDir,
+		MatchContent: ageAPIServer.MatchContentConfig{
+			Enabled:      cfg.MatchContent.Enabled,
+			Folder:       cfg.MatchContent.Folder,
+			MaxFileSize:  cfg.MatchContent.MaxFileSize,
+			MaxTotalSize: cfg.MatchContent.MaxTotalSize,
+			Expiry:       cfg.MatchContentExpiryDuration(),
+		},
 	})
 	if err != nil {
 		return fmt.Errorf("build server: %w", err), i.ErrDatabase

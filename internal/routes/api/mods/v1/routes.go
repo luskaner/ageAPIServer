@@ -21,4 +21,6 @@ func Register(group *router.Group, deps shared.Deps) {
 	base.Handle("POST", "/flag", router.Chain(Flag(deps), auth.Required()))
 	base.Handle("POST", "/install", router.Chain(Install(deps), auth.Required()))
 	base.Handle("POST", "/uninstall", router.Chain(Uninstall(deps), auth.Required()))
+	base.Handle("POST", "/create", router.Chain(Create(deps), auth.Required()))
+	base.Handle("POST", "/delete", router.Chain(Delete(deps), auth.Required()))
 }

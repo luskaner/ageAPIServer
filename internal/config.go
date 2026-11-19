@@ -89,16 +89,27 @@ type Storage struct {
 	UploadDir string
 }
 
+// MatchContent holds the /api/MatchContent storage: the multiplayer savegames
+// and replays the game clients upload and download.
+type MatchContent struct {
+	Enabled      bool
+	Folder       string
+	MaxFileSize  int64
+	MaxTotalSize int64
+	Expiry       string
+}
+
 // Config is the process configuration, loaded from TOML, environment and flags.
 type Config struct {
-	Server     Server
-	DB         DB
-	Log        Log
-	Session    Session
-	CORS       CORS
-	Pagination Pagination
-	Auth       Auth
-	Storage    Storage
+	Server       Server
+	DB           DB
+	Log          Log
+	Session      Session
+	CORS         CORS
+	Pagination   Pagination
+	Auth         Auth
+	Storage      Storage
+	MatchContent MatchContent
 }
 
 // DefaultConfig returns the values used when neither the file nor the
@@ -142,6 +153,13 @@ func DefaultConfig() Config {
 		},
 		Storage: Storage{
 			UploadDir: "uploads",
+		},
+		MatchContent: MatchContent{
+			Enabled:      true,
+			Folder:       "auto",
+			MaxFileSize:  32 << 20,
+			MaxTotalSize: 256 << 20,
+			Expiry:       "12h",
 		},
 	}
 }
@@ -255,6 +273,15 @@ func (c Config) Validate() error {
 	if c.Pagination.MaxCount < 1 {
 		return errors.New("config: Pagination.MaxCount must be at least 1")
 	}
+	if c.MatchContent.MaxFileSize < 0 {
+		return errors.New("config: MatchContent.MaxFileSize must not be negative")
+	}
+	if c.MatchContent.MaxTotalSize < 0 {
+		return errors.New("config: MatchContent.MaxTotalSize must not be negative")
+	}
+	if _, err := time.ParseDuration(c.MatchContent.Expiry); err != nil {
+		return fmt.Errorf("config: MatchContent.Expiry: %w", err)
+	}
 	return nil
 }
 
@@ -279,6 +306,12 @@ func (c Config) SessionTTLDuration() time.Duration {
 // CORSMaxAgeDuration is the parsed CORS.MaxAge.
 func (c Config) CORSMaxAgeDuration() time.Duration {
 	d, _ := time.ParseDuration(c.CORS.MaxAge)
+	return d
+}
+
+// MatchContentExpiryDuration is the parsed MatchContent.Expiry.
+func (c Config) MatchContentExpiryDuration() time.Duration {
+	d, _ := time.ParseDuration(c.MatchContent.Expiry)
 	return d
 }
 

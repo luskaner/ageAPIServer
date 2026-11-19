@@ -9,7 +9,8 @@ import (
 )
 
 // Installed serves POST /api/v4/Mods/Installed/. AOE3 and AOM send only
-// `{"game":N}`, so the filter defaults must be applied server side.
+// `{"game":N}`, so the filter defaults must be applied server side: the echo
+// resolves them as sort popular, order DESC and count 1000.
 func Installed(deps shared.Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var request shared.FindRequest
@@ -23,7 +24,11 @@ func Installed(deps shared.Deps) http.HandlerFunc {
 		}
 
 		viewer := router.ViewerFrom(r)
-		filter := request.ToFilter(deps.Pagination, shared.FilterDefaults{Sort: "popular", Order: "desc"})
+		filter := request.ToFilter(deps.Pagination, shared.FilterDefaults{
+			Sort:  "popular",
+			Order: "desc",
+			Count: 1000,
+		})
 		filter.InstalledUserID = viewer.UserID
 
 		page, err := deps.Stores.Mods.Find(r.Context(), filter, viewer)
@@ -31,6 +36,10 @@ func Installed(deps shared.Deps) http.HandlerFunc {
 			shared.WriteStoreError(w, err)
 			return
 		}
-		shared.WriteJSON(w, http.StatusOK, shared.NewModList(request.SearchParams(), page, viewer.LoggedOn))
+		// The echo of the capture resolves the defaults: creator "" (not the
+		// caller) and count 1000 for a request that only carried the game.
+		empty := ""
+		echo := request.WithEchoDefaults("popular", "desc", 1000, &empty)
+		shared.WriteJSON(w, http.StatusOK, shared.NewModList(r, deps, echo.SearchParams(), page, viewer.LoggedOn))
 	}
 }

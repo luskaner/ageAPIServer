@@ -8,8 +8,15 @@ import (
 	"github.com/luskaner/ageAPIServer/internal/routes/shared"
 )
 
-// My serves POST /api/v4/Mods/My/. The AOM client asks for count 1000, so the
-// page size is not clamped to the 45 of the legacy endpoints.
+// myCountMax caps one My page. Every explicit count in the captures renders
+// the same maximum in the echo - the website's 12, the AOM client's 1000 and
+// the AOE4 client's 20000 all answer 500 - while a body without count keeps
+// the default 10.
+const myCountMax = int64(500)
+
+// My serves POST /api/v4/Mods/My/. The AOE3 client sends only {"game":3} and
+// answers count 10; AOM sends count 1000 explicitly. The AOE3 My resolves the
+// echo to the creator of the caller and the default count 10.
 func My(deps shared.Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var request shared.FindRequest
@@ -26,8 +33,11 @@ func My(deps shared.Deps) http.HandlerFunc {
 		filter := request.ToFilter(deps.Pagination, shared.FilterDefaults{
 			Sort:  "popular",
 			Order: "desc",
-			Count: 1000,
+			Count: 10,
 		})
+		if filter.Limit <= 0 || int64(filter.Limit) > myCountMax {
+			filter.Limit = int(myCountMax)
+		}
 		filter.CreatorUserID = viewer.UserID
 
 		page, err := deps.Stores.Mods.Find(r.Context(), filter, viewer)
@@ -35,6 +45,15 @@ func My(deps shared.Deps) http.HandlerFunc {
 			shared.WriteStoreError(w, err)
 			return
 		}
-		shared.WriteJSON(w, http.StatusOK, shared.NewModList(request.SearchParams(), page, viewer.LoggedOn))
+		// The echo carries the resolved filter: the creator of the caller
+		// and 10, unless the body carried an explicit count - every such
+		// capture echoes the 500 maximum, so that is what renders.
+		echo := request
+		if echo.Count.Set {
+			// Any explicit count lands on the capped page of the captures.
+			echo.Count.Value = myCountMax
+		}
+		echo = echo.WithEchoDefaults("popular", "desc", 10, &viewer.SteamID)
+		shared.WriteJSON(w, http.StatusOK, shared.NewModList(r, deps, echo.SearchParams(), page, viewer.LoggedOn))
 	}
 }

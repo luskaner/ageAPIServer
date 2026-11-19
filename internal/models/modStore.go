@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -215,8 +216,10 @@ func buildWhere(filter FindFilter) (string, []any) {
 		}
 	}
 	if filter.FeaturedOnly {
+		// The only Featured captures with rows (the AOM client and the
+		// website, both game 1001) carry modStatusId 5 "Featured" rows.
 		clauses = append(clauses, "m.modStatusId = ?")
-		args = append(args, 2)
+		args = append(args, 5)
 	}
 	if filter.CreatorUserID > 0 {
 		clauses = append(clauses, "m.creatorId = ?")
@@ -267,13 +270,16 @@ func escapeLike(value string) string {
 	return replacer.Replace(value)
 }
 
-// modStatusID maps the enum name to its id.
+// modStatusID maps the enum name to its id. Published is 2, the id every live
+// detail carries alongside the name.
 func modStatusID(name string) (int64, bool) {
 	switch strings.ToLower(strings.TrimSpace(name)) {
 	case "published":
-		return 1, true
-	case "featured":
 		return 2, true
+	case "featured":
+		// The AOM Featured capture renders modStatusId 5 with modStatus
+		// "Featured" for every row, so the name resolves to 5.
+		return 5, true
 	case "unlisted":
 		return 3, true
 	case "draft":
@@ -328,6 +334,14 @@ type modRow struct {
 	totalCount        sql.NullInt64
 }
 
+// fallbackModTypeNames resolves the type ids that the live Tags catalog of a
+// game does not list but published mods still carry: the AOE4 client uploads
+// its mods as model Type 6 - "Extension" - for game 4, whose Tags capture
+// stops at id 5, and its created mod renders modType "Extension" anyway.
+var fallbackModTypeNames = map[[2]int64]string{
+	{4, 6}: "Extension",
+}
+
 // scanModRows materialises every row and closes the cursor.
 func scanModRows(rows *sql.Rows) ([]modRow, int64, error) {
 	defer func() { _ = rows.Close() }()
@@ -354,6 +368,11 @@ func scanModRows(rows *sql.Rows) ([]modRow, int64, error) {
 		if row.totalCount.Valid {
 			total = row.totalCount.Int64
 		}
+		if row.modTypeID.Valid && row.gameTitleID.Valid {
+			if name, ok := fallbackModTypeNames[[2]int64{row.gameTitleID.Int64, row.modTypeID.Int64}]; ok {
+				row.modTypeName = sql.NullString{String: name, Valid: true}
+			}
+		}
 		scanned = append(scanned, row)
 	}
 	if err := rows.Err(); err != nil {
@@ -371,6 +390,11 @@ type viewerState struct {
 	flagged    map[int64]bool
 	rating     map[int64]float64
 	review     map[int64]string
+	// updateable carries the mods whose subscribed version predates the
+	// current one: the AOE4 capture renders updateAvailable true on the
+	// Detail its creator reloads after publishing 1.2 over the 1.1 it
+	// installed.
+	updateable map[int64]bool
 }
 
 // hydrate fills images, tags, ratings and the viewer flags of a page.
@@ -424,16 +448,23 @@ func (s *ModStore) imagesFor(ctx context.Context, ids []int64) (map[int64][]Imag
 		if err := rows.Scan(&modID, &image.ImageID, &image.DisplayIndex, &image.ImageName, &image.ImageThumbnail, &size); err != nil {
 			return nil, fmt.Errorf("scan image: %w", err)
 		}
-		image.ImageFileSize = nullFloat(size)
+		// Every Detail and Related capture renders imageFileSize null even for
+		// images uploaded with an imageFileSize, so the column is not
+		// projected.
+		_ = size
 		images[modID] = append(images[modID], image)
 	}
 	return images, rows.Err()
 }
 
 func (s *ModStore) tagsFor(ctx context.Context, ids []int64) (map[int64][]ModTag, error) {
-	query := `SELECT tm.modId, t.modTypeId, t.modTypeName
-		FROM mod_tag_map tm JOIN mod_types t ON t.gameTitleId = tm.gameTitleId AND t.modTypeId = tm.modTypeId
-		WHERE tm.modId IN (` + placeholders(len(ids)) + `) ORDER BY tm.modId, t.modTypeId`
+	// LEFT JOIN: a tag map row of a tag the game's catalog does not name
+	// still renders its id - the AOE4 created mod answers modTagIds [26]
+	// while its Tags catalog stops at 5, with modTagNames empty.
+	query := `SELECT tm.modId, tm.modTypeId, COALESCE(t.modTypeName, '')
+		FROM mod_tag_map tm
+		LEFT JOIN mod_types t ON t.gameTitleId = tm.gameTitleId AND t.modTypeId = tm.modTypeId
+		WHERE tm.modId IN (` + placeholders(len(ids)) + `) ORDER BY tm.modId, tm.modTypeId`
 	rows, err := s.db.QueryContext(ctx, query, argsFor(ids)...)
 	if err != nil {
 		return nil, fmt.Errorf("query mod tags: %w", err)
@@ -469,9 +500,11 @@ func (s *ModStore) ratingsFor(ctx context.Context, ids []int64) (map[int64]*Rati
 		if err := rows.Scan(&modID, &total, &average); err != nil {
 			return nil, fmt.Errorf("scan ratings: %w", err)
 		}
+		// The capture renders the average with one decimal (4.1 for a mod of
+		// 125 ratings), so the render of every page carries that shape.
 		ratings[modID] = &Ratings{
 			Rating: RatingBreakdown{
-				Average:    average,
+				Average:    math.Round(average*10) / 10,
 				TotalCount: total,
 			},
 		}
@@ -488,6 +521,7 @@ func (s *ModStore) viewerStateFor(ctx context.Context, ids []int64, viewer Viewe
 		flagged:    map[int64]bool{},
 		rating:     map[int64]float64{},
 		review:     map[int64]string{},
+		updateable: map[int64]bool{},
 	}
 	if !viewer.LoggedOn || viewer.UserID <= 0 {
 		return state, nil
@@ -541,6 +575,33 @@ func (s *ModStore) viewerStateFor(ctx context.Context, ids []int64, viewer Viewe
 	if err := rows.Err(); err != nil {
 		_ = rows.Close()
 		return state, fmt.Errorf("iterate subscriptions: %w", err)
+	}
+	_ = rows.Close()
+
+	// A subscription that was stamped with an older installed version flags
+	// an update: the capture answers updateAvailable true on the Detail the
+	// creator reloads after publishing over its installed 1.1.
+	updateArgs := append([]any{viewer.UserID}, argsFor(ids)...)
+	rows, err = s.db.QueryContext(ctx,
+		`SELECT s.modId FROM subscriptions s
+		 JOIN mods m ON m.modId = s.modId
+		 WHERE s.userId = ? AND s.modId IN (`+placeholders(len(ids))+`)
+		   AND s.installedVersion IS NOT NULL
+		   AND s.installedVersion < COALESCE(NULLIF(m.modVersion, 0), 1.1)`, updateArgs...)
+	if err != nil {
+		return state, fmt.Errorf("query installed versions: %w", err)
+	}
+	for rows.Next() {
+		var modID int64
+		if err := rows.Scan(&modID); err != nil {
+			_ = rows.Close()
+			return state, fmt.Errorf("scan installed version: %w", err)
+		}
+		state.updateable[modID] = true
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return state, fmt.Errorf("iterate installed versions: %w", err)
 	}
 	_ = rows.Close()
 
@@ -607,7 +668,7 @@ func (r modRow) toMod(state viewerState, ratings *Ratings, images []Image, tags 
 		VerifiedVersion:   nullString(r.verifiedVersion),
 		ModTypeID:         nullInt(r.modTypeID),
 		ClientID:          nullString(r.clientID),
-		ModType:           nullString(r.modTypeName),
+		ModType:           listModTypeName(r.modTypeID, r.modTypeName),
 		MetaData:          rawJSON(r.metaData),
 		ModStatusID:       nullInt(r.modStatusID),
 		ModStatusMessage:  nullString(r.modStatusMessage),
@@ -620,7 +681,7 @@ func (r modRow) toMod(state viewerState, ratings *Ratings, images []Image, tags 
 		DiscourseURL:      nullString(r.discourseURL),
 		CreateDate:        r.createDate.String,
 		LastUpdate:        r.lastUpdate.String,
-		UpdateAvailable:   NumberToBool(r.updateAvailable.Int64),
+		UpdateAvailable:   NumberToBool(r.updateAvailable.Int64) || state.updateable[r.modID],
 		ModFileSize:       r.modFileSize.Float64,
 		ModDiskSize:       nullFloat(r.modDiskSize),
 		Popular:           nullInt(r.popular),
@@ -690,7 +751,7 @@ func (r modRow) toDetail(state viewerState, ratings *Ratings, images []Image, ta
 		DiscourseURL:      nullString(r.discourseURL),
 		CreateDate:        nullString(r.createDate),
 		LastUpdate:        nullString(r.lastUpdate),
-		UpdateAvailable:   nullBool(r.updateAvailable),
+		UpdateAvailable:   orBool(nullBool(r.updateAvailable), state.updateable[r.modID]),
 		ModFileSize:       nullFloat(r.modFileSize),
 		ModDiskSize:       nullFloat(r.modDiskSize),
 		Popular:           nullInt(r.popular),
@@ -725,8 +786,27 @@ func (r modRow) toDetail(state viewerState, ratings *Ratings, images []Image, ta
 			detail.UserReview = &review
 		}
 	}
-	applyTags(&detail.ModTags, &detail.ModTagIDs, &detail.ModTagNames, tags)
+	// The Detail captures render modTags null even with tags resolved - the
+	// ids (and the names in modTagNames) are the arrays it carries - so the
+	// names array the list rows show is collected into a discarded slice.
+	var listNames []string
+	applyTags(&listNames, &detail.ModTagIDs, &detail.ModTagNames, tags)
 	return detail
+}
+
+// listModTypeName names the mod type of a list row. The AOM Featured list
+// answers "Unknown" for a type id its Tags catalog does not sell (type 1 of
+// game 1001), while the Detail of the same mod leaves the name null - the
+// Detail keeps nullString and only the lists reach for the placeholder.
+func listModTypeName(modTypeID sql.NullInt64, name sql.NullString) *string {
+	if name.Valid && name.String != "" {
+		return &name.String
+	}
+	if modTypeID.Valid {
+		unknown := "Unknown"
+		return &unknown
+	}
+	return nil
 }
 
 func applyTags(names *[]string, ids *[]int64, tagNames *[]string, tags []ModTag) {
@@ -738,6 +818,12 @@ func applyTags(names *[]string, ids *[]int64, tagNames *[]string, tags []ModTag)
 	*tagNames = make([]string, 0, len(tags))
 	for _, tag := range tags {
 		*ids = append(*ids, tag.ModTypeID)
+		// A tag the catalog does not name contributes the id only: the AOE4
+		// created mod of the capture carries modTagIds [26] with empty
+		// modTagNames.
+		if tag.ModTypeName == "" {
+			continue
+		}
 		*names = append(*names, tag.ModTypeName)
 		*tagNames = append(*tagNames, tag.ModTypeName)
 	}
@@ -838,6 +924,53 @@ func (s *ModStore) Related(ctx context.Context, modID int64, viewer Viewer) (*Mo
 	return &ModPage{Mods: mods, TotalCount: total}, nil
 }
 
+// Owns reports whether the user is the creator of the mod. ErrNotFound marks
+// a mod that does not exist, so callers answer it like Publish does.
+func (s *ModStore) Owns(ctx context.Context, modID int64, userID int64) (bool, error) {
+	if modID <= 0 {
+		return false, ErrNotFound
+	}
+	var creatorID sql.NullInt64
+	err := s.db.QueryRowContext(ctx, `SELECT creatorId FROM mods WHERE modId = ?`, modID).Scan(&creatorID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, ErrNotFound
+	}
+	if err != nil {
+		return false, fmt.Errorf("read mod creator: %w", err)
+	}
+	return creatorID.Valid && creatorID.Int64 == userID, nil
+}
+
+// AttachFile commits the download file of a mod: the file fields of the AOE4
+// CheckAndPublishFile commit - fileUrl, fileCRC, modFileSize and modDiskSize
+// equal (the capture block commits 1509669 in both) - and lastUpdate moves to
+// the commit time, which the Detail capture shows sharing the commit second.
+func (s *ModStore) AttachFile(ctx context.Context, modID int64, url string, crc string, size float64, diskSize float64) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin attach: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	var exists int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM mods WHERE modId = ?`, modID).Scan(&exists); err != nil {
+		return fmt.Errorf("check mod: %w", err)
+	}
+	if exists == 0 {
+		return ErrNotFound
+	}
+	stamp := time.Now().UTC().Format("2006-01-02T15:04:05.000")
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE mods SET fileUrl = ?, fileCRC = ?, modFileSize = ?, modDiskSize = ?, lastUpdate = ?
+		 WHERE modId = ?`,
+		nullEmpty(url), crc, size, size, stamp, modID); err != nil {
+		return fmt.Errorf("attach file: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit attach: %w", err)
+	}
+	return nil
+}
+
 // DownloadTargetFor returns the stored data of a mod download.
 func (s *ModStore) DownloadTargetFor(ctx context.Context, modID int64) (*DownloadTarget, error) {
 	var target DownloadTarget
@@ -897,10 +1030,13 @@ func (s *ModStore) subscribe(ctx context.Context, userID int64, modID int64, cou
 	firstCount := errors.Is(err, sql.ErrNoRows) || downloadCounted == 0
 
 	now := time.Now().UTC().Format(time.RFC3339)
+	// The version the subscription carries is stamped so a later publish of a
+	// newer version flags the update (updateAvailable of the AOE4 capture).
 	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO subscriptions (userId, modId, downloadedAt) VALUES (?, ?, ?)
+		`INSERT INTO subscriptions (userId, modId, downloadedAt, installedVersion)
+		 VALUES (?, ?, ?, COALESCE((SELECT COALESCE(NULLIF(modVersion, 0), 1.1) FROM mods WHERE modId = ?), 1.1))
 		 ON CONFLICT (userId, modId) DO UPDATE SET downloadedAt = COALESCE(subscriptions.downloadedAt, excluded.downloadedAt)`,
-		userID, modID, now); err != nil {
+		userID, modID, now, modID); err != nil {
 		return nil, fmt.Errorf("upsert subscription: %w", err)
 	}
 	if count && firstCount {
@@ -974,10 +1110,16 @@ func (s *ModStore) Install(ctx context.Context, userID int64, modID int64) (*Dow
 	firstInstall := errors.Is(err, sql.ErrNoRows) || !installedAt.Valid
 
 	now := time.Now().UTC().Format(time.RFC3339)
+	// Installing stamps the version that was installed: re-installing a mod
+	// after one of its updates stops flagging the update, while a
+	// subscription left on an older version keeps it.
 	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO subscriptions (userId, modId, installedAt) VALUES (?, ?, ?)
-		 ON CONFLICT (userId, modId) DO UPDATE SET installedAt = COALESCE(subscriptions.installedAt, excluded.installedAt)`,
-		userID, modID, now); err != nil {
+		`INSERT INTO subscriptions (userId, modId, installedAt, installedVersion)
+		 VALUES (?, ?, ?, COALESCE((SELECT COALESCE(NULLIF(modVersion, 0), 1.1) FROM mods WHERE modId = ?), 1.1))
+		 ON CONFLICT (userId, modId) DO UPDATE SET
+		   installedAt = COALESCE(subscriptions.installedAt, excluded.installedAt),
+		   installedVersion = excluded.installedVersion`,
+		userID, modID, now, modID); err != nil {
 		return nil, fmt.Errorf("upsert install: %w", err)
 	}
 	if firstInstall {
@@ -1267,11 +1409,76 @@ type PublishInput struct {
 	FileURL       string
 	FileCRC       string
 	FileSize      float64
+	// ModVersion is stored as sent: zero for a create without one. The v4
+	// Detail renders the stored zero as 1.1, which is what the capture shows.
+	ModVersion float64
+	// DiskSize is the uncompressed size of the archive, which the capture
+	// carries as modDiskSize of a created mod. Zero keeps it unset.
+	DiskSize float64
+	// Thumbnail overrides the image the mod starts with.
+	Thumbnail string
 }
 
-// Publish creates or updates a mod and returns its id. The status follows the
-// visibility, which is the only signal the request carries: Public is
-// Published, Unlisted is Unlisted and Private is Draft.
+// defaultTagOther is the tag the upstream puts on a freshly created mod that
+// does not carry one: the created mod of the capture answers later with
+// modTagIds [26] ("Other") although the request carried no tags.
+const defaultTagOther = 26
+
+// LocalModIDFloor opens the numeric range reserved for mods published by this
+// server. The official server hands out ids from its own namespace - the
+// upstream scrape peaks at 593,695 and grows by a few hundred thousand ids
+// per decade - so nothing below LocalModIDFloor can ever move, and nothing
+// from LocalModIDFloor up can collide with an official mod. The ceiling keeps
+// every id readable where a 32-bit client (the legacy v1 wire) parses modId.
+const (
+	LocalModIDFloor = int64(1_000_000_000)
+	LocalModIDLimit = int64(2_147_483_647)
+)
+
+// allocateLocalModID hands out the next id of the locally published band
+// [LocalModIDFloor, LocalModIDLimit) inside tx. The allocator row is seeded
+// lazily and only ever advances, so deleting the highest mod never recycles
+// its id. It also jumps past any id that already landed in the band sideways
+// (a hand-imported capture or a restored backup), so banded ids stay unique
+// whatever wrote them.
+func (s *ModStore) allocateLocalModID(ctx context.Context, tx *sql.Tx) (int64, error) {
+	if _, err := tx.ExecContext(ctx,
+		`INSERT OR IGNORE INTO mod_id_allocator (id, nextModId) VALUES (1, ?)`,
+		LocalModIDFloor); err != nil {
+		return 0, fmt.Errorf("seed mod id allocator: %w", err)
+	}
+	var next int64
+	if err := tx.QueryRowContext(ctx,
+		`SELECT nextModId FROM mod_id_allocator WHERE id = 1`).Scan(&next); err != nil {
+		return 0, fmt.Errorf("read mod id allocator: %w", err)
+	}
+	var highest sql.NullInt64
+	if err := tx.QueryRowContext(ctx,
+		`SELECT MAX(modId) FROM mods WHERE modId >= ?`, LocalModIDFloor).Scan(&highest); err != nil {
+		return 0, fmt.Errorf("read banded mods: %w", err)
+	}
+	if highest.Valid && highest.Int64 >= next {
+		next = highest.Int64 + 1
+	}
+	if next >= LocalModIDLimit {
+		return 0, fmt.Errorf("%w: the local mod id band [%d, %d) is spent",
+			ErrValidation, LocalModIDFloor, LocalModIDLimit)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE mod_id_allocator SET nextModId = ? WHERE id = 1`, next+1); err != nil {
+		return 0, fmt.Errorf("advance mod id allocator: %w", err)
+	}
+	return next, nil
+}
+
+// Publish creates or updates a mod and returns its id. The live capture of a
+// created mod shows that the status is always Published (2) whatever the
+// visibility - which is a field of its own -, that a new mod starts at
+// modVersion that the v4 render shows as 1.1, an empty verifiedVersion, that the description is
+// mirrored into modDescription, that the changeList gains the
+// `mod-update-date` header of the day, that the creator counts as its first
+// download and install (popular and both counters start at 1) and that the
+// tag "Other" is attached when the request carries no tags.
 func (s *ModStore) Publish(ctx context.Context, input PublishInput) (int64, error) {
 	if input.CreatorID <= 0 {
 		return 0, ErrUnauthorized
@@ -1294,11 +1501,18 @@ func (s *ModStore) Publish(ctx context.Context, input PublishInput) (int64, erro
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	now := time.Now().UTC().Format(time.RFC3339)
+	// The capture stamps the dates as 2026-11-18T22:07:21.043: milliseconds and
+	// no zone marker, unlike the RFC 3339 form stored before the capture.
+	now := time.Now().UTC()
+	stamp := now.Format("2006-01-02T15:04:05.000")
+	changeList := WrapChangeList(input.ChangeList, now)
 	modID := input.ModID
 	if modID > 0 {
 		var creatorID sql.NullInt64
-		err := tx.QueryRowContext(ctx, `SELECT creatorId FROM mods WHERE modId = ?`, modID).Scan(&creatorID)
+		var storedVersion float64
+		err := tx.QueryRowContext(ctx,
+			`SELECT creatorId, COALESCE(modVersion, 0) FROM mods WHERE modId = ?`, modID).
+			Scan(&creatorID, &storedVersion)
 		if errors.Is(err, sql.ErrNoRows) {
 			return 0, ErrNotFound
 		}
@@ -1308,30 +1522,69 @@ func (s *ModStore) Publish(ctx context.Context, input PublishInput) (int64, erro
 		if !creatorID.Valid || creatorID.Int64 != input.CreatorID {
 			return 0, ErrUnauthorized
 		}
+		// The AOE4 capture bumps the version on every update publish: the mod
+		// it created shows 1.1 right after the create (the stored zero of the
+		// legacy Detail is 1.1 on the v4 render) and 1.2 after the second
+		// publish, although that request carried no version field. A request
+		// that carries a version still stores it as sent.
+		version := input.ModVersion
+		if version == 0 {
+			version = storedVersion
+			if version == 0 {
+				version = 1.1
+			}
+			// One decimal at a time, without the binary drift of a raw
+			// 1.1+0.1 (1.2000000000000002, which JSON spells out).
+			version = math.Round(version*10) / 10
+			version += 0.1
+			version = math.Round(version*10) / 10
+		}
 		if _, err := tx.ExecContext(ctx, `
-			UPDATE mods SET gameTitleId = ?, modName = ?, description = ?, changeList = ?,
-			                modVisibility = ?, modStatusId = ?, modTypeId = ?, allowDiscussion = ?,
-			                lastUpdate = ?
+			UPDATE mods SET gameTitleId = ?, modName = ?, description = ?, modDescription = ?, changeList = ?,
+			                modVersion = ?, modVisibility = ?, modStatusId = ?, modTypeId = ?,
+			                allowDiscussion = ?, lastUpdate = ?
 			WHERE modId = ?`,
-			input.GameTitleID, input.ModName, input.Description, input.ChangeList,
-			visibility, status, nullableID(input.ModTypeID), BoolToNumber(input.ModDiscussion),
-			now, modID); err != nil {
+			input.GameTitleID, input.ModName, input.Description, nullEmpty(input.Description), changeList,
+			version, visibility, status, nullableID(input.ModTypeID), BoolToNumber(input.ModDiscussion),
+			stamp, modID); err != nil {
 			return 0, fmt.Errorf("update mod: %w", err)
 		}
 	} else {
-		result, err := tx.ExecContext(ctx, `
-			INSERT INTO mods (gameTitleId, modName, description, changeList, modVisibility,
-			                  modStatusId, modTypeId, allowDiscussion, creatorId, createDate, lastUpdate)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			input.GameTitleID, input.ModName, input.Description, input.ChangeList, visibility,
-			status, nullableID(input.ModTypeID), BoolToNumber(input.ModDiscussion),
-			input.CreatorID, now, now)
+		// modVersion stays as sent - zero when the request carries none. The
+		// capture shows the raw zero on the legacy Detail and 1.1 on the v4
+		// Detail, which the v4 render fills in.
+		thumbnail := input.Thumbnail
+		if thumbnail == "" && len(input.Images) > 0 {
+			thumbnail = input.Images[0].Thumbnail
+		}
+		diskSize := input.DiskSize
+		modID, err = s.allocateLocalModID(ctx, tx)
 		if err != nil {
+			return 0, fmt.Errorf("allocate mod id: %w", err)
+		}
+		if _, err = tx.ExecContext(ctx, `
+			INSERT INTO mods (modId, gameTitleId, modName, description, modDescription, changeList, modVersion,
+			                  verifiedVersion, modTypeId, allowDiscussion, modStatusId, modVisibility,
+			                  creatorId, createDate, lastUpdate, popular, downloads, installs,
+			                  thumbnail, fileUrl, fileCRC, modFileSize, modDiskSize)
+			VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, 1, 1, 1, ?, ?, ?, ?, ?)`,
+			modID, input.GameTitleID, input.ModName, input.Description,
+			nullEmpty(input.Description), changeList, input.ModVersion, nullableID(input.ModTypeID),
+			BoolToNumber(input.ModDiscussion), status, visibility, input.CreatorID, stamp, stamp,
+			nullEmpty(thumbnail), nullEmpty(input.FileURL), input.FileCRC, input.FileSize,
+			nullFloat64(diskSize)); err != nil {
 			return 0, fmt.Errorf("insert mod: %w", err)
 		}
-		modID, err = result.LastInsertId()
-		if err != nil {
-			return 0, fmt.Errorf("read new mod id: %w", err)
+		// The creator counts as its first download and install, and carries the
+		// viewer state userDownloaded/userInstalled that the capture shows on a
+		// freshly created mod. The installed version is stamped so a later
+		// publish flips updateAvailable: the AOE4 capture renders it true for
+		// the creator after it publishes 1.2 over its installed 1.1.
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO subscriptions (userId, modId, downloadedAt, installedAt, downloadCounted, installedVersion)
+			 VALUES (?, ?, ?, ?, 1, COALESCE((SELECT COALESCE(NULLIF(modVersion, 0), 1.1) FROM mods WHERE modId = ?), 1.1))`,
+			input.CreatorID, modID, now.Format(time.RFC3339), now.Format(time.RFC3339), modID); err != nil {
+			return 0, fmt.Errorf("subscribe creator: %w", err)
 		}
 	}
 
@@ -1346,15 +1599,24 @@ func (s *ModStore) Publish(ctx context.Context, input PublishInput) (int64, erro
 	if _, err := tx.ExecContext(ctx, `DELETE FROM mod_tag_map WHERE modId = ?`, modID); err != nil {
 		return 0, fmt.Errorf("clear mod tags: %w", err)
 	}
-	for _, tagID := range uniqueIDs(input.TagIDs) {
-		var exists int
-		if err := tx.QueryRowContext(ctx,
-			`SELECT COUNT(*) FROM mod_types WHERE gameTitleId = ? AND modTypeId = ?`,
-			input.GameTitleID, tagID).Scan(&exists); err != nil {
-			return 0, fmt.Errorf("check mod tag: %w", err)
-		}
-		if exists == 0 {
-			return 0, ErrValidation
+	// A mod created without tags gets "Other": the captures of both games
+	// answer with modTagIds [26] later on, also game 4 whose Tags catalog has
+	// no 26 (the id renders without a name then).
+	tags := uniqueIDs(input.TagIDs)
+	if len(tags) == 0 {
+		tags = []int64{defaultTagOther}
+	}
+	for _, tagID := range tags {
+		if tagID != defaultTagOther {
+			var exists int
+			if err := tx.QueryRowContext(ctx,
+				`SELECT COUNT(*) FROM mod_types WHERE gameTitleId = ? AND modTypeId = ?`,
+				input.GameTitleID, tagID).Scan(&exists); err != nil {
+				return 0, fmt.Errorf("check mod tag: %w", err)
+			}
+			if exists == 0 {
+				return 0, ErrValidation
+			}
 		}
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO mod_tag_map (modId, gameTitleId, modTypeId) VALUES (?, ?, ?)`,
@@ -1364,16 +1626,31 @@ func (s *ModStore) Publish(ctx context.Context, input PublishInput) (int64, erro
 	}
 
 	if len(input.Images) > 0 {
-		if _, err := tx.ExecContext(ctx, `DELETE FROM mod_images WHERE modId = ?`, modID); err != nil {
-			return 0, fmt.Errorf("clear mod images: %w", err)
-		}
+		// An update that re-published an existing image identity (the AOE2
+		// client rides Create with the imageId and the absolute URL it got,
+		// and uploads nothing new) keeps the stored rows: replacing them
+		// would renumber the identities the subscriber's install saw. A row
+		// with a fresh upload carries the stored CRC name and renews the set.
+		fresh := false
 		for _, image := range input.Images {
-			if _, err := tx.ExecContext(ctx, `
-				INSERT INTO mod_images (imageId, modId, displayIndex, imageName, imageThumbnail, imageFileSize)
-				VALUES (?, ?, ?, ?, ?, ?)`,
-				fmt.Sprintf("%d-%d", modID, image.DisplayIndex), modID, image.DisplayIndex,
-				image.ImageName, image.Thumbnail, image.FileSize); err != nil {
-				return 0, fmt.Errorf("insert mod image: %w", err)
+			if image.ImageName != "" && !strings.HasPrefix(image.ImageName, "http://") &&
+				!strings.HasPrefix(image.ImageName, "https://") {
+				fresh = true
+				break
+			}
+		}
+		if fresh {
+			if _, err := tx.ExecContext(ctx, `DELETE FROM mod_images WHERE modId = ?`, modID); err != nil {
+				return 0, fmt.Errorf("clear mod images: %w", err)
+			}
+			for _, image := range input.Images {
+				if _, err := tx.ExecContext(ctx, `
+					INSERT INTO mod_images (imageId, modId, displayIndex, imageName, imageThumbnail, imageFileSize)
+					VALUES (?, ?, ?, ?, ?, ?)`,
+					fmt.Sprintf("%d-%d", modID, image.DisplayIndex), modID, image.DisplayIndex,
+					image.ImageName, image.Thumbnail, image.FileSize); err != nil {
+					return 0, fmt.Errorf("insert mod image: %w", err)
+				}
 			}
 		}
 	}
@@ -1384,18 +1661,45 @@ func (s *ModStore) Publish(ctx context.Context, input PublishInput) (int64, erro
 	return modID, nil
 }
 
-// statusForVisibility maps the visibility of a Publish request to a mod status.
+// statusForVisibility validates the visibility of a Publish request. The
+// capture of a created mod with Unlisted visibility answers modStatusId 2
+// ("Published") and the November Detail captures show the same id for public
+// mods, so every visibility maps to the published status.
 func statusForVisibility(visibility string) (int64, bool) {
 	switch visibility {
-	case "Public":
-		return 1, true
-	case "Unlisted":
-		return 3, true
-	case "Private":
-		return 4, true
+	case "Public", "Unlisted", "Private":
+		return 2, true
 	default:
 		return 0, false
 	}
+}
+
+// WrapChangeList prefixes the client changeList with the update-date header
+// the captures carry: a plain `<p>changelog</p>` comes back as
+// `<h4 class="mod-update-date">11/18/2026</h4><p>changelog</p>`. An empty
+// changeList stays empty.
+func WrapChangeList(changeList string, when time.Time) string {
+	if strings.TrimSpace(changeList) == "" {
+		return changeList
+	}
+	return `<h4 class="mod-update-date">` + when.Format("01/02/2006") + `</h4>` + changeList
+}
+
+// nullEmpty stores an unset string as NULL, which is how the capture renders
+// the fields the request did not fill.
+func nullEmpty(value string) any {
+	if value == "" {
+		return nil
+	}
+	return value
+}
+
+// nullFloat64 stores a zero as NULL so an optional number stays unset.
+func nullFloat64(value float64) any {
+	if value == 0 {
+		return nil
+	}
+	return value
 }
 
 // nullableID turns a zero id into NULL, so an optional reference stays unset.
@@ -1422,10 +1726,18 @@ func uniqueIDs(ids []int64) []int64 {
 
 // Upsert inserts or replaces a mod and its tags.
 func (s *ModStore) Upsert(ctx context.Context, input ModInput) error {
-	if input.ModID <= 0 || input.GameTitleID <= 0 || input.ModName == "" {
+	// Imports mirror the official namespace, which lives below
+	// LocalModIDFloor; ids beyond LocalModIDLimit are on purpose never
+	// accepted because 32-bit clients (the legacy v1 wire) cannot read them.
+	// Ids inside the band are allowed - re-importing a locally published mod
+	// round-trips through here - and allocateLocalModID skips past them.
+	if input.ModID <= 0 || input.ModID > LocalModIDLimit ||
+		input.GameTitleID <= 0 || input.ModName == "" {
 		return ErrValidation
 	}
-	if input.ModStatusID < 1 || input.ModStatusID > 4 {
+	if input.ModStatusID < 1 || input.ModStatusID > 5 {
+		// 5 is the live "Featured" of the AOM captures; the unknown ids
+		// default to 1, which every render reads as the plain Published.
 		input.ModStatusID = 1
 	}
 	if input.ModVisibility == "" {

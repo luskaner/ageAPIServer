@@ -1,7 +1,6 @@
 package v4
 
 import (
-	"mime/multipart"
 	"net/http"
 	"strconv"
 
@@ -58,9 +57,13 @@ func Publish(deps shared.Deps) http.HandlerFunc {
 			input.FileURL = saved.Path
 			input.FileCRC = saved.CRC
 			input.FileSize = saved.Size
+			// The AOM capture answers the uncompressed total of its zip in
+			// modDiskSize (6654 versus the 2813 compressed), so the size of
+			// the archive entries rides along whenever a file is present.
+			input.DiskSize = shared.DiskSize(form.File)
 		}
 
-		images, err := publishImages(deps.UploadDir, form)
+		images, err := shared.PublishImages(deps.UploadDir, form)
 		if err != nil {
 			shared.WriteError(w, http.StatusInternalServerError, shared.CodeInternal, err.Error())
 			return
@@ -78,36 +81,4 @@ func Publish(deps shared.Deps) http.HandlerFunc {
 			ResultValue:  strconv.FormatInt(modID, 10),
 		})
 	}
-}
-
-// publishImages stores the uploaded screenshots and pairs them with their
-// metadata. An entry without a matching upload keeps the thumbnail the client
-// sent, which is how an update reuses an image that already exists.
-func publishImages(dir string, form shared.PublishForm) ([]models.PublishImage, error) {
-	if len(form.ImageMeta) == 0 {
-		return nil, nil
-	}
-	uploads := make(map[string]*multipart.FileHeader, len(form.Images))
-	for _, header := range form.Images {
-		uploads[header.Filename] = header
-	}
-
-	images := make([]models.PublishImage, 0, len(form.ImageMeta))
-	for _, meta := range form.ImageMeta {
-		image := models.PublishImage{
-			DisplayIndex: meta.DisplayIndex,
-			ImageName:    meta.ImageName,
-			Thumbnail:    meta.ImageThumbnail,
-		}
-		if header, ok := uploads[meta.ImageName]; ok {
-			saved, err := shared.SaveUpload(dir, header)
-			if err != nil {
-				return nil, err
-			}
-			image.Thumbnail = saved.Path
-			image.FileSize = saved.Size
-		}
-		images = append(images, image)
-	}
-	return images, nil
 }

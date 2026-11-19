@@ -35,8 +35,11 @@ func (j *Json[T]) UnmarshalJSON(data []byte) error {
 type A = []any
 type H map[string]any
 
+// Byte parity with the official service matters: the game's upload task
+// compares the raw response, so bodies carry no trailing newline and the
+// Content-Type matches the captures ("application/json; charset=utf-8").
 func writeJSONHeader(w http.ResponseWriter) {
-	w.Header().Set("Content-Type", "application/json;charset=utf-8")
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 }
 
 // JSON encodes data before writing so the response never streams
@@ -48,7 +51,7 @@ func JSON(w http.ResponseWriter, data any) {
 		return
 	}
 	writeJSONHeader(w)
-	_, _ = w.Write(append(encoded, '\n'))
+	_, _ = w.Write(encoded)
 }
 
 // RawJSON writes an already encoded JSON document.

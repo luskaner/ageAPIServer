@@ -39,7 +39,10 @@ func Register(group *router.Group, deps shared.Deps) {
 	base.Handle("GET", "/unsubscribe/{modid}", router.Chain(Unsubscribe(deps), auth.Required()))
 	base.Handle("POST", "/rate", router.Chain(Rate(deps), auth.Required()))
 	base.Handle("GET", "/download/{modid}", router.Chain(Download(deps), auth.Required()))
+	base.Handle("GET", "/download/{modid}/file", router.Chain(DownloadFile(deps), auth.Required()))
+	base.Handle("GET", "/image/{name}", router.Chain(Image(deps), auth.Optional()))
 	base.Handle("POST", "/publish", router.Chain(Publish(deps), auth.Required()))
+	base.Handle("PUT", "/checkandpublishfile", router.Chain(CheckAndPublishFile(deps), auth.Required()))
 	base.Handle("POST", "/delete", router.Chain(Delete(deps), auth.Required()))
 	base.Handle("POST", "/report", router.Chain(Report(deps), auth.Required()))
 }

@@ -5,8 +5,6 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
-	"encoding/base64"
-	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -167,21 +165,20 @@ func randomToken() (string, error) {
 	return hex.EncodeToString(buffer), nil
 }
 
-// steamIDFromToken extracts the SteamID64 from a Steam1.0 ticket. The ticket is
-// a binary blob; the account id is looked up as a little-endian uint64 inside
-// it. When the ticket does not carry one, a stable hash of the token is used so
+// steamIDFromToken extracts the SteamID64 from a Steam1.0 ticket. Only the
+// gbe_fork ticket layouts are decoded (see gbeTicketSteamID): the tickets the
+// real Steam client issues keep the account id inside an AES-256 Encrypted App
+// Ticket that cannot be opened without the publisher key, so they stay opaque.
+// When the token carries no readable id, a stable hash of the token is used so
 // the same client keeps the same identity across restarts.
 func steamIDFromToken(token string) string {
-	for _, encoding := range []*base64.Encoding{base64.StdEncoding, base64.RawStdEncoding, base64.URLEncoding, base64.RawURLEncoding} {
+	for _, encoding := range steamTicketEncodings {
 		decoded, err := encoding.DecodeString(token)
-		if err != nil || len(decoded) < 8 {
+		if err != nil {
 			continue
 		}
-		for offset := 0; offset+8 <= len(decoded); offset++ {
-			value := binary.LittleEndian.Uint64(decoded[offset : offset+8])
-			if value >= steamID64Min && value <= steamID64Max {
-				return strconv.FormatUint(value, 10)
-			}
+		if steamID, ok := gbeTicketSteamID(decoded); ok {
+			return strconv.FormatUint(steamID, 10)
 		}
 	}
 	sum := sha256.Sum256([]byte(token))

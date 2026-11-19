@@ -22,4 +22,7 @@ type Deps struct {
 	// UploadDir is where Publish stores the mod file and its images. Empty
 	// rejects any request that carries a file.
 	UploadDir string
+	// MatchContent is the store behind the /api/MatchContent endpoints. Nil or
+	// disabled answers 404.
+	MatchContent *models.CustomFilesStore
 }

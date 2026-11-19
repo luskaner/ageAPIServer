@@ -55,6 +55,15 @@ components:
       scheme: bearer
       bearerFormat: "Steam1.0"
       description: Steam authentication token sent by the game clients
+    XblAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: "XBL3.0"
+      description: |
+        Xbox token of the Microsoft Store clients, sent as
+        `XBL3.0 x=<puid>;<XToken>`. The AOE3 capture carries Steam for the
+        read endpoints and this for `My`, `Publish` and `Delete` in the same
+        session.
     WebSession:
       type: apiKey
       in: cookie
@@ -178,6 +187,10 @@ components:
           type: string
           enum: [Published, Featured, Unlisted, Draft]
           nullable: true
+          description: |-
+            The captures only carry 2/"Published" (every created mod) and
+            5/"Featured" (the AOM Featured rows); any other stored id
+            renders Published.
         modStatusMessage:
           type: string
           nullable: true
@@ -347,7 +360,8 @@ components:
         modid:
           type: string
           nullable: true
-          description: Mod ID filter
+          description: Mod ID filter. The echo always renders the number as a
+            string, "0" when unset; the legacy v1 echoes keep null instead.
 
     # Request schemas
     FindModsRequest:
@@ -514,6 +528,61 @@ components:
         id:
           type: integer
           description: Mod ID
+
+    CreateModRequestV1:
+      type: object
+      description: |
+        Multipart body of the legacy Create. The live capture of the AOE2
+        client carries these field names exactly (mixed casing included):
+        `modFiles` is the zip archive, `modImages` the screenshots paired
+        with `ImageMetaData` by file name, and the scalar fields spell
+        `ModName`, `GameTitleId`, `ModType`, `modVisibility` and `ChangeList`.
+        An `imageFileSize` of the metadata entry is a string. An update adds
+        `ModId` and re-declares the existing image by its `imageId` with
+        absolute URLs (and carries no file parts).
+      properties:
+        ModId:
+          type: integer
+          description: Present only when updating an existing owned mod (same id echoed).
+        ModName:
+          type: string
+        GameTitleId:
+          type: integer
+        ModType:
+          type: integer
+        Description:
+          type: string
+        modVisibility:
+          type: string
+          enum: [Public, Private, Unlisted]
+        ChangeList:
+          type: string
+        ImageMetaData:
+          type: string
+          description: JSON array of `{"displayIndex":0,"imageFileSize":"25261","imageName":"_preview-icon.jpg"}`.
+        modImages:
+          type: string
+          format: binary
+        modFiles:
+          type: string
+          format: binary
+
+    DeletedModResponseV1:
+      type: object
+      description: The envelope the legacy Delete answers. resultValue is the string "true".
+      properties:
+        errorCode:
+          type: integer
+        errorMessage:
+          type: string
+        resultKey:
+          type: string
+          example: Deleted
+        resultValue:
+          type: string
+          example: "true"
+        resultJson:
+          nullable: true
 
     FeaturedModsRequest:
       type: object
@@ -939,7 +1008,12 @@ paths:
       tags:
         - Featured
       summary: Get featured mods
-      description: Returns featured mods for a specific game
+      description: |
+        Returns featured mods for a specific game: the AOM client sends only
+        {"game":1001} and the resolved echo answers sort popular and count 10
+        with creator null; the website sends sort (recentpopular), count (3)
+        and filters explicitly and echoes them as sent. The rows are the
+        status-5 mods ("Featured") of the game.
       operationId: getFeaturedMods
       security: []
       requestBody:
@@ -1356,6 +1430,99 @@ paths:
         '500':
           description: Internal server error
 
+  # Mods - Create (v1, AOE2)
+  /api/v1/Mods/Create/:
+    post:
+      tags:
+        - Mods
+      summary: Create a mod (v1, AOE2)
+      description: |
+        Create a mod from the multipart form the AOE2 client builds. The
+        answer carries the new id in resultValue with resultKey "ModId".
+        Without explicit tags the mod gets "Other" (26). The creator counts
+        as its first download and install, and the status is Published (2)
+        whatever the visibility.
+        A body carrying ModId of the caller's mod updates it instead and
+        answers the same id - the AOE2 client re-publishes through this
+        endpoint after an upload; the re-declared image identity (imageId
+        with absolute URLs and no file parts) keeps the stored images as
+        they are.
+      operationId: createModV1
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/CreateModRequestV1'
+      responses:
+        '200':
+          description: Successful response with the new mod id
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  errorCode:
+                    type: integer
+                    example: 0
+                  errorMessage:
+                    type: string
+                    example: "0"
+                  resultKey:
+                    type: string
+                    example: ModId
+                  resultValue:
+                    type: string
+                    description: The id of the created mod
+                    example: "593779"
+                  resultJson:
+                    nullable: true
+        '401':
+          description: Unauthorized
+        '500':
+          description: Internal server error
+
+  # Mods - Delete (v1, AOE2)
+  /api/v1/Mods/Delete/:
+    post:
+      tags:
+        - Mods
+      summary: Delete a mod (v1, AOE2)
+      description: Delete a mod only when the caller is its creator (legacy v1 endpoint for AOE2)
+      operationId: deleteModV1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UninstallModRequest'
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  errorCode:
+                    type: integer
+                    example: 0
+                  errorMessage:
+                    type: string
+                    example: "0"
+                  resultKey:
+                    type: string
+                    example: Deleted
+                  resultValue:
+                    type: string
+                    example: "true"
+                  resultJson:
+                    nullable: true
+        '401':
+          description: Unauthorized
+        '500':
+          description: Internal server error
+
   # Reviews
   /api/v4/mods/Reviews:
     post:
@@ -1574,8 +1741,9 @@ paths:
       description: |
         Creates a mod when modId is absent and updates it when modId is present.
         The body is multipart/form-data because it carries the archive and the
-        screenshots. modStatusId is derived from modVisibility: Public is 1,
-        Unlisted is 3 and Private is 4.
+        screenshots. modStatusId is always the published 2, which is what the
+        created mod of the AOE2 captures answers and every live detail shows,
+        whatever the visibility.
       operationId: publishMod
       requestBody:
         required: true
@@ -1594,17 +1762,37 @@ paths:
                   type: integer
                 modType:
                   type: integer
-                  description: Mod type id, validated against the tags of the game
+                  description: |-
+                    Mod type id. Validated against the tags (mod_types) of the
+                    game, except the auto tag 26 "Other" of a create without
+                    tags, which attaches even when the catalog of the game has
+                    no 26 (the AOE4 capture does: modTagIds [26] with empty
+                    modTagNames). The AOE4 client uploads type 6 (Extension)
+                    for game 4, whose catalog stops at 5, and its Detail
+                    answers modType Extension anyway.
                 modName:
                   type: string
+                  description: |-
+                    The AOE4 client sends a JSON localization map such as
+                    {"es":"moddisplayname"}; the server stores its plain
+                    string (the en entry wins, otherwise the first entry in
+                    the order the request wrote).
                 description:
                   type: string
+                  description: Same JSON localization map handling as modName.
                 changeList:
                   type: string
+                  description: |-
+                    Stored prefixed with the mod-update-date header of the day
+                    when it is not empty. An update publish without one bumps
+                    the stored modVersion by 0.1 (the AOE4 capture moves 1.1
+                    to 1.2) and flips updateAvailable for subscribers of the
+                    previous version.
                 modVisibility:
                   type: string
                   enum: [Public, Private, Unlisted]
                   default: Public
+                  description: Read case-insensitively; the AOE4 client sends lowercase.
                 modDiscussion:
                   type: boolean
                   default: false
@@ -1661,13 +1849,80 @@ paths:
         '500':
           description: Internal server error
 
+  /api/v4/mods/CheckAndPublishFile:
+    put:
+      tags:
+        - Mods
+      summary: Upload the mod archive (Azure Block Blob style)
+      description: |
+        The upload the AOE4 client performs right after Publish. One request
+        per block and a final commit, both answering the bare JSON literal
+        true:
+
+        * `?comp=block&blockid=00000000&modId=N` - the body is the raw file
+          bytes (application/octet-stream). The block is staged under
+          UploadDir/blocks/<modId>/; nothing visible changes yet.
+        * `?comp=blocklist&modId=N` - the body is
+          <?xml version="1.0" encoding="utf-8"?><BlockList><Latest>00000000</Latest></BlockList>.
+          The commit concatenates the listed blocks in order, stores them as
+          the mod file (fileUrl, fileCRC, modFileSize and modDiskSize equal,
+          as the capture shows) and stamps lastUpdate.
+
+        The commit requires the caller to own the mod; a missing mod answers
+        the ProblemDetails body of the v4 Detail. The route carries its own
+        block size cap (512 MiB) instead of Server.MaxBodyBytes, since the
+        capture's block is 1.5 MB.
+      operationId: checkAndPublishFile
+      parameters:
+        - name: comp
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [block, blocklist]
+        - name: blockid
+          in: query
+          schema:
+            type: string
+            default: "00000000"
+          description: Block id of a comp=block upload (Azure base64 form)
+        - name: modId
+          in: query
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '200':
+          description: The block or the commit was stored
+          content:
+            application/json:
+              schema:
+                type: boolean
+                example: true
+        '400':
+          description: Bad request, including a block list naming a block that was not uploaded
+        '401':
+          description: Unauthorized, or the caller is not the creator
+        '404':
+          description: Mod not found (ProblemDetails)
+
   # My mods (v4)
   /api/v4/Mods/My/:
     post:
       tags:
         - Mods
       summary: Get my mods (v4)
-      description: Returns mods created by the current user
+      description: |
+        Returns mods created by the current user. A body without count uses
+        the default 10; every explicit count lands on the 500 maximum that
+        the captures echo (12, 1000 and 20000 answer 500).
       operationId: getMyModsV4
       requestBody:
         required: true

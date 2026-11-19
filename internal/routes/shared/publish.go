@@ -1,6 +1,8 @@
 package shared
 
 import (
+	"archive/zip"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,8 +12,11 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/luskaner/ageAPIServer/internal/models"
 )
 
 // maxPublishMemory is how much of a multipart body is kept in memory before the
@@ -19,12 +24,15 @@ import (
 const maxPublishMemory = 8 << 20
 
 // ImageMeta is one entry of the ImageMetaData field of Publish. imageId is null
-// when the image is new and set when it already exists upstream.
+// when the image is new and set when it already exists upstream. FileSize only
+// carries the declared size of the legacy Create entries (imageFileSize); the
+// real upload size replaces it when the entry matches an uploaded file.
 type ImageMeta struct {
 	ImageID        *string `json:"imageId"`
 	DisplayIndex   int64   `json:"displayIndex"`
 	ImageName      string  `json:"imageName"`
 	ImageThumbnail string  `json:"imageThumbnail"`
+	FileSize       float64 `json:"-"`
 }
 
 // PublishForm is the parsed multipart body of Publish.
@@ -50,29 +58,29 @@ func ParsePublish(r *http.Request) (PublishForm, error) {
 		return PublishForm{}, fmt.Errorf("read multipart body: %w", err)
 	}
 	form := PublishForm{
-		ModName:       strings.TrimSpace(r.FormValue("modName")),
-		Description:   r.FormValue("description"),
-		ChangeList:    r.FormValue("changeList"),
-		ModVisibility: strings.TrimSpace(r.FormValue("modVisibility")),
+		ModName:       strings.TrimSpace(decodeLocalized(formValue(r, "modName"))),
+		Description:   decodeLocalized(formValue(r, "description")),
+		ChangeList:    formValue(r, "changeList"),
+		ModVisibility: canonicalVisibility(formValue(r, "modVisibility")),
 	}
 
 	var err error
-	if form.GameTitleID, err = intField(r, "gameTitleId"); err != nil {
+	if form.GameTitleID, err = intFieldOf(r, "gameTitleId"); err != nil {
 		return PublishForm{}, err
 	}
-	if form.ModID, err = intField(r, "modId"); err != nil {
+	if form.ModID, err = intFieldOf(r, "modId"); err != nil {
 		return PublishForm{}, err
 	}
-	if form.ModTypeID, err = intField(r, "modType"); err != nil {
+	if form.ModTypeID, err = intFieldOf(r, "modType"); err != nil {
 		return PublishForm{}, err
 	}
-	if form.ModDiscussion, err = boolField(r, "modDiscussion"); err != nil {
+	if form.ModDiscussion, err = boolFieldOf(r, "modDiscussion"); err != nil {
 		return PublishForm{}, err
 	}
 	if form.TagIDs, err = tagFields(r); err != nil {
 		return PublishForm{}, err
 	}
-	if raw := r.FormValue("ImageMetaData"); raw != "" {
+	if raw := formValue(r, "ImageMetaData"); raw != "" {
 		if err := json.Unmarshal([]byte(raw), &form.ImageMeta); err != nil {
 			return PublishForm{}, fmt.Errorf("ImageMetaData: %w", err)
 		}
@@ -84,6 +92,223 @@ func ParsePublish(r *http.Request) (PublishForm, error) {
 		}
 	}
 	return form, nil
+}
+
+// CreateImageMeta is one entry of the ImageMetaData field of the legacy
+// Create. Unlike Publish the entry carries the file size as a string and no
+// image id or thumbnail.
+type CreateImageMeta struct {
+	DisplayIndex  int64  `json:"displayIndex"`
+	ImageFileSize string `json:"imageFileSize"`
+	ImageName     string `json:"imageName"`
+}
+
+// formValue reads a multipart value under any casing of the field name: the
+// AOE2 Create spells ModName and GameTitleId, the AOE3 client spells
+// imageMetaData, and the website spells everything lowerCamel. The first
+// entry wins.
+func formValue(r *http.Request, name string) string {
+	if r.MultipartForm != nil {
+		for key, values := range r.MultipartForm.Value {
+			if len(values) > 0 && strings.EqualFold(key, name) {
+				return values[0]
+			}
+		}
+	}
+	return ""
+}
+
+// decodeLocalized stores the value of the AOE4 Publish fields, which the
+// client sends as a JSON localization map: the capture carries modName
+// {"es":"moddisplayname"} and description {"es":"moddesc"} while every later
+// render shows the plain string. A non-object value - the plain text AOE2 and
+// AOE3 send - passes through. Inside the object the "en" entry wins when
+// present, otherwise the first entry in the order the client wrote them.
+func decodeLocalized(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if !strings.HasPrefix(raw, "{") {
+		return raw
+	}
+	type entry struct {
+		key   string
+		value string
+	}
+	var entries []entry
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	if _, err := decoder.Token(); err != nil { // {
+		return raw
+	}
+	for decoder.More() {
+		var key string
+		if err := decoder.Decode(&key); err != nil {
+			return raw
+		}
+		var value any
+		if err := decoder.Decode(&value); err != nil {
+			return raw
+		}
+		text, ok := value.(string)
+		if !ok {
+			encoded, err := json.Marshal(value)
+			if err != nil {
+				return raw
+			}
+			text = string(encoded)
+		}
+		entries = append(entries, entry{key: key, value: text})
+	}
+	if len(entries) == 0 {
+		return raw
+	}
+	for _, item := range entries {
+		if item.key == "en" {
+			return item.value
+		}
+	}
+	return entries[0].value
+}
+
+// canonicalVisibility folds the visibility casing: the AOE4 client spells the
+// field lowercase ("public") while the storage and the renders of the capture
+// keep "Public", "Private" and "Unlisted".
+func canonicalVisibility(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "public":
+		return "Public"
+	case "private":
+		return "Private"
+	case "unlisted":
+		return "Unlisted"
+	default:
+		return strings.TrimSpace(raw)
+	}
+}
+
+// legacyInt reads an optional integer legacy form field.
+func legacyInt(r *http.Request, name string) (int64, error) {
+	raw := strings.TrimSpace(formValue(r, name))
+	if raw == "" {
+		return 0, nil
+	}
+	value, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%s must be a number", name)
+	}
+	return value, nil
+}
+
+// ParseCreate reads the multipart body of the legacy /api/v1/Mods/Create. The
+// fields are the ones of the capture: the modImages screenshot (paired with
+// ImageMetaData by file name), the modFiles archive, ModName, GameTitleId,
+// ModType, Description, modVisibility and ChangeList. The scalar fields are
+// optional at this level: Validate decides which ones are required.
+func ParseCreate(r *http.Request) (PublishForm, error) {
+	if err := r.ParseMultipartForm(maxPublishMemory); err != nil {
+		return PublishForm{}, fmt.Errorf("read multipart body: %w", err)
+	}
+	form := PublishForm{
+		ModName:       strings.TrimSpace(decodeLocalized(formValue(r, "ModName"))),
+		Description:   decodeLocalized(formValue(r, "Description")),
+		ChangeList:    formValue(r, "ChangeList"),
+		ModVisibility: canonicalVisibility(formValue(r, "modVisibility")),
+	}
+	var err error
+	if form.GameTitleID, err = legacyInt(r, "GameTitleId"); err != nil {
+		return PublishForm{}, err
+	}
+	// The AOE2 client updates through this endpoint: the November 19 capture
+	// carries ModId of the existing mod, so the field decides between create
+	// and update exactly like the v4 Publish form.
+	if form.ModID, err = legacyInt(r, "ModId"); err != nil {
+		return PublishForm{}, err
+	}
+	if form.ModTypeID, err = legacyInt(r, "ModType"); err != nil {
+		return PublishForm{}, err
+	}
+	if raw := formValue(r, "ImageMetaData"); raw != "" {
+		var images []CreateImageMeta
+		if err := json.Unmarshal([]byte(raw), &images); err != nil {
+			return PublishForm{}, fmt.Errorf("ImageMetaData: %w", err)
+		}
+		form.ImageMeta = make([]ImageMeta, 0, len(images))
+		for _, image := range images {
+			meta := ImageMeta{DisplayIndex: image.DisplayIndex, ImageName: image.ImageName}
+			if size, err := strconv.ParseFloat(strings.TrimSpace(image.ImageFileSize), 64); err == nil {
+				meta.FileSize = size
+			}
+			form.ImageMeta = append(form.ImageMeta, meta)
+		}
+	}
+	if r.MultipartForm != nil {
+		form.Images = r.MultipartForm.File["modImages"]
+		if files := r.MultipartForm.File["modFiles"]; len(files) > 0 {
+			form.File = files[0]
+		}
+	}
+	return form, nil
+}
+
+// DiskSize returns the uncompressed size of an uploaded archive, which the
+// capture carries as modDiskSize of a created mod. A body that is not a zip
+// archive answers 0 and no error: the size is then left unset.
+func DiskSize(header *multipart.FileHeader) float64 {
+	source, err := header.Open()
+	if err != nil {
+		return 0
+	}
+	defer func() { _ = source.Close() }()
+	reader, ok := source.(io.ReaderAt)
+	if !ok {
+		return 0
+	}
+	archive, err := zip.NewReader(reader, header.Size)
+	if err != nil {
+		return 0
+	}
+	var total uint64
+	for _, entry := range archive.File {
+		total += entry.UncompressedSize64
+	}
+	return float64(total)
+}
+
+// PublishImages stores the uploaded screenshots and pairs them with their
+// metadata. An entry without a matching upload keeps the thumbnail the client
+// sent, which is how an update reuses an image that already exists, and falls
+// back to the declared size.
+func PublishImages(dir string, form PublishForm) ([]models.PublishImage, error) {
+	if len(form.ImageMeta) == 0 {
+		return nil, nil
+	}
+	uploads := make(map[string]*multipart.FileHeader, len(form.Images))
+	for _, header := range form.Images {
+		uploads[header.Filename] = header
+	}
+
+	images := make([]models.PublishImage, 0, len(form.ImageMeta))
+	for _, meta := range form.ImageMeta {
+		image := models.PublishImage{
+			DisplayIndex: meta.DisplayIndex,
+			ImageName:    meta.ImageName,
+			Thumbnail:    meta.ImageThumbnail,
+			FileSize:     meta.FileSize,
+		}
+		if header, ok := uploads[meta.ImageName]; ok {
+			saved, err := SaveUpload(dir, header)
+			if err != nil {
+				return nil, err
+			}
+			// The stored name replaces both references: the capture renders
+			// imageName and imageThumbnail as the same URL of the stored
+			// image, so a name the client never sent back as a URL also
+			// resolves through /image.
+			image.ImageName = saved.Path
+			image.Thumbnail = saved.Path
+			image.FileSize = saved.Size
+		}
+		images = append(images, image)
+	}
+	return images, nil
 }
 
 // Validate rejects a publish that misses a required field.
@@ -158,9 +383,128 @@ func SaveUpload(dir string, header *multipart.FileHeader) (SavedFile, error) {
 	return saved, nil
 }
 
-// intField reads an optional integer form field.
-func intField(r *http.Request, name string) (int64, error) {
-	raw := strings.TrimSpace(r.FormValue(name))
+// BlockIDName maps a block id to a safe file name: the ids a client sends are
+// Azure style base64 ("00000000" up to 64 chars), which is only hex encoded
+// here so no separator trick can escape the staging directory.
+func BlockIDName(blockID string) string {
+	return hex.EncodeToString([]byte(blockID))
+}
+
+// StageBlock stores one raw block of CheckAndPublishFile under
+// dir/blocks/<modId>/<blockid> and reports its size. Rewriting the same block
+// id replaces its bytes, which is how the capture uploads twice.
+func StageBlock(dir string, modID int64, blockID string, source io.Reader) (float64, error) {
+	if dir == "" {
+		return 0, errors.New("no upload directory configured")
+	}
+	if strings.TrimSpace(blockID) == "" {
+		blockID = "00000000"
+	}
+	blockDir := filepath.Join(dir, "blocks", strconv.FormatInt(modID, 10))
+	if err := os.MkdirAll(blockDir, 0o755); err != nil {
+		return 0, fmt.Errorf("create block dir: %w", err)
+	}
+	temp, err := os.CreateTemp(blockDir, "block-*")
+	if err != nil {
+		return 0, fmt.Errorf("create block: %w", err)
+	}
+	tempName := temp.Name()
+	written, err := io.Copy(temp, source)
+	if err != nil {
+		_ = temp.Close()
+		_ = os.Remove(tempName)
+		return 0, fmt.Errorf("write block: %w", err)
+	}
+	if err := temp.Close(); err != nil {
+		_ = os.Remove(tempName)
+		return 0, fmt.Errorf("close block: %w", err)
+	}
+	final := filepath.Join(blockDir, BlockIDName(blockID))
+	if err := os.Rename(tempName, final); err != nil {
+		_ = os.Remove(tempName)
+		return 0, fmt.Errorf("store block: %w", err)
+	}
+	return float64(written), nil
+}
+
+// SaveStagedBlocks concatenates the staged block files in the order their
+// block list names them and stores the result like SaveUpload would: content
+// addressed by its CRC32, carrying the .sga extension of the capture. The
+// caller removes the staging files it is done with.
+func SaveStagedBlocks(dir string, parts []string) (SavedFile, error) {
+	if dir == "" {
+		return SavedFile{}, errors.New("no upload directory configured")
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return SavedFile{}, fmt.Errorf("create upload dir: %w", err)
+	}
+	temp, err := os.CreateTemp(dir, "upload-*")
+	if err != nil {
+		return SavedFile{}, fmt.Errorf("create upload: %w", err)
+	}
+	tempName := temp.Name()
+	defer func() { _ = os.Remove(tempName) }()
+
+	hash := crc32.NewIEEE()
+	var written int64
+	for _, part := range parts {
+		source, err := os.Open(part)
+		if err != nil {
+			_ = temp.Close()
+			return SavedFile{}, fmt.Errorf("read staged block: %w", err)
+		}
+		count, err := io.Copy(io.MultiWriter(temp, hash), source)
+		_ = source.Close()
+		if err != nil {
+			_ = temp.Close()
+			return SavedFile{}, fmt.Errorf("append staged block: %w", err)
+		}
+		written += count
+	}
+	if err := temp.Close(); err != nil {
+		return SavedFile{}, fmt.Errorf("close upload: %w", err)
+	}
+
+	crc := fmt.Sprintf("%08x", hash.Sum32())
+	name := crc + ".sga"
+	saved := SavedFile{Path: name, Size: float64(written), CRC: crc}
+	final := filepath.Join(dir, name)
+	if _, err := os.Stat(final); err == nil {
+		// The same bytes are already stored.
+		return saved, nil
+	}
+	if err := os.Rename(tempName, final); err != nil {
+		return SavedFile{}, fmt.Errorf("store upload: %w", err)
+	}
+	return saved, nil
+}
+
+// ParseBlockList reads the body of a CheckAndPublishFile commit: the XML the
+// capture sends (`<?xml ...?><BlockList><Latest>00000000</Latest></BlockList>`)
+// or the newline separated block ids Azure also accepts. The returned order
+// is the order the blocks are stored in.
+func ParseBlockList(body []byte) []string {
+	var ids []string
+	matches := blockListPattern.FindAllSubmatch(body, -1)
+	for _, match := range matches {
+		ids = append(ids, string(match[1]))
+	}
+	if len(ids) == 0 {
+		for _, line := range strings.Split(string(body), "\n") {
+			line = strings.TrimSuffix(strings.TrimSpace(line), "\r")
+			if line != "" {
+				ids = append(ids, line)
+			}
+		}
+	}
+	return ids
+}
+
+var blockListPattern = regexp.MustCompile(`<(?:Latest|Uncommitted|Committed)>([^<]+)<\/(?:Latest|Uncommitted|Committed)>`)
+
+// intFieldOf reads an optional integer form field under any casing.
+func intFieldOf(r *http.Request, name string) (int64, error) {
+	raw := strings.TrimSpace(formValue(r, name))
 	if raw == "" {
 		return 0, nil
 	}
@@ -171,9 +515,9 @@ func intField(r *http.Request, name string) (int64, error) {
 	return value, nil
 }
 
-// boolField reads an optional boolean form field.
-func boolField(r *http.Request, name string) (bool, error) {
-	raw := strings.TrimSpace(r.FormValue(name))
+// boolFieldOf reads an optional boolean form field under any casing.
+func boolFieldOf(r *http.Request, name string) (bool, error) {
+	raw := strings.TrimSpace(formValue(r, name))
 	if raw == "" {
 		return false, nil
 	}
@@ -185,23 +529,28 @@ func boolField(r *http.Request, name string) (bool, error) {
 }
 
 // tagFields reads modTags, which the client sends either as repeated fields or
-// as one comma-separated value.
+// as one comma-separated value, under any casing.
 func tagFields(r *http.Request) ([]int64, error) {
 	if r.MultipartForm == nil {
 		return nil, nil
 	}
 	var out []int64
-	for _, raw := range r.MultipartForm.Value["modTags"] {
-		for _, piece := range strings.Split(raw, ",") {
-			piece = strings.TrimSpace(piece)
-			if piece == "" {
-				continue
+	for key, keyValues := range r.MultipartForm.Value {
+		if !strings.EqualFold(key, "modTags") {
+			continue
+		}
+		for _, raw := range keyValues {
+			for _, piece := range strings.Split(raw, ",") {
+				piece = strings.TrimSpace(piece)
+				if piece == "" {
+					continue
+				}
+				value, err := strconv.ParseInt(piece, 10, 64)
+				if err != nil {
+					return nil, errors.New("modTags must be numbers")
+				}
+				out = append(out, value)
 			}
-			value, err := strconv.ParseInt(piece, 10, 64)
-			if err != nil {
-				return nil, errors.New("modTags must be numbers")
-			}
-			out = append(out, value)
 		}
 	}
 	return out, nil

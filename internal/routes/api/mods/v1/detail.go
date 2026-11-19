@@ -3,6 +3,8 @@ package v1
 import (
 	"net/http"
 
+	"github.com/luskaner/ageAPIServer/internal/models"
+
 	i "github.com/luskaner/ageAPIServer/internal"
 	"github.com/luskaner/ageAPIServer/internal/routes/router"
 	"github.com/luskaner/ageAPIServer/internal/routes/shared"
@@ -27,6 +29,7 @@ func Detail(deps shared.Deps) http.HandlerFunc {
 			shared.WriteStoreError(w, err)
 			return
 		}
-		shared.WriteJSON(w, http.StatusOK, detail)
+		shared.AbsolutizeDetail(r, deps, detail)
+		shared.WriteJSON(w, http.StatusOK, models.LegacyDetailOf(*detail))
 	}
 }

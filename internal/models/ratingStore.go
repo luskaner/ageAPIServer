@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math"
 )
 
 // RatingStore owns mod_ratings and the denormalised aggregates on mods.
@@ -90,6 +91,11 @@ func recomputeTx(ctx context.Context, tx *sql.Tx, modID int64) (*Ratings, error)
 		Scan(&reviewsCount); err != nil {
 		return nil, fmt.Errorf("count reviews: %w", err)
 	}
+
+	// The render commits to the one decimal the capture shows: the AOM Rate
+	// answers average 4.1 for a mod of 125 ratings, so the stored column and
+	// both renders carry the rounded form.
+	average.Float64 = math.Round(average.Float64*10) / 10
 
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE mods SET currentRating = ?, positiveRatings = ?, totalRatings = ?, reviewsCount = ?

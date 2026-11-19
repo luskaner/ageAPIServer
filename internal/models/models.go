@@ -327,18 +327,15 @@ type Poll struct {
 	Questions      []PollQuestion `json:"questions"`
 }
 
-// ModStatusName maps modStatusId to the enum of the spec. The mapping is a
-// working assumption: the captures carry no response bodies to confirm it.
+// ModStatusName maps modStatusId to the status name. Only two pairs live in
+// the captures: the created mods answer modStatusId 2 ("Published", every
+// game) and the AOM Featured list answers 5 ("Featured") for every row - the
+// detail of the featured 286553 carries the same pair. The ads ids carry no
+// single evidence, so they render Published, the one every live mod agrees on.
 func ModStatusName(id int64) string {
 	switch id {
-	case 1:
-		return "Published"
-	case 2:
+	case 5:
 		return "Featured"
-	case 3:
-		return "Unlisted"
-	case 4:
-		return "Draft"
 	default:
 		return "Published"
 	}
@@ -386,6 +383,13 @@ func nullBool(value sql.NullInt64) *bool {
 		return nil
 	}
 	out := value.Int64 != 0
+	return &out
+}
+
+// orBool merges a nullable flag with a computed one. The computed flag wins
+// the nil case so the caller renders false instead of null.
+func orBool(value *bool, flag bool) *bool {
+	out := flag || (value != nil && *value)
 	return &out
 }
 

@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/spf13/pflag"
 )
@@ -130,6 +131,41 @@ func TestEnvironmentOverridesFile(t *testing.T) {
 		if cfg.DB.Path != "from-file.db" {
 			t.Fatalf("attempt %d: db path = %q", attempt, cfg.DB.Path)
 		}
+	}
+}
+
+// TestLoadMatchContentConfig pins the defaults of the /api/MatchContent store
+// and that the TOML section reaches the struct.
+func TestLoadMatchContentConfig(t *testing.T) {
+	cfg, _, err := Load("", nil)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if !cfg.MatchContent.Enabled || cfg.MatchContent.Folder != "auto" {
+		t.Fatalf("match content = %+v", cfg.MatchContent)
+	}
+	if cfg.MatchContent.MaxFileSize != 32<<20 || cfg.MatchContent.MaxTotalSize != 256<<20 {
+		t.Fatalf("match content sizes = %+v", cfg.MatchContent)
+	}
+	if cfg.MatchContentExpiryDuration() != 12*time.Hour {
+		t.Fatalf("expiry = %s", cfg.MatchContentExpiryDuration())
+	}
+
+	path := filepath.Join(t.TempDir(), "config.toml")
+	content := "[MatchContent]\nEnabled = false\nFolder = \"match-store\"\nMaxFileSize = 1024\nMaxTotalSize = 4096\nExpiry = \"30m\"\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _, err = Load(path, nil)
+	if err != nil {
+		t.Fatalf("load file: %v", err)
+	}
+	if cfg.MatchContent.Enabled {
+		t.Fatal("MatchContent.Enabled did not come from the file")
+	}
+	if cfg.MatchContent.Folder != "match-store" || cfg.MatchContent.MaxFileSize != 1024 ||
+		cfg.MatchContent.MaxTotalSize != 4096 || cfg.MatchContentExpiryDuration() != 30*time.Minute {
+		t.Fatalf("match content from file = %+v", cfg.MatchContent)
 	}
 }
 

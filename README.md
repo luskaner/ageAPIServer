@@ -46,6 +46,12 @@ mux.Handle("/aoeMods/", http.StripPrefix("/aoeMods", srv.Handler()))
 `srv.Routes()` returns the inventory (`Method`, internal `Path`, `AuthRequired`,
 `SpecPath`) so an integrator can generate a client or a proxy.
 
+`Config` also carries `Console` (where the per-request log line goes; `nil` is
+stdout, `io.Discard` keeps a host application's output clean), `PublicBaseURL`
+(the base of download and media URLs; empty derives it from each request),
+`MaxBodySize` (zero means 1 MiB; `Publish` needs more) and `MatchContent` (the
+savegame store; the zero value leaves those endpoints off).
+
 ## Endpoints
 
 Every path of `api_spec.yml` is served. Matching is case-insensitive and the
@@ -56,17 +62,21 @@ same session, and the website sends `/api/v4/mods/UnSubscribe/...`.
 | Group | Endpoints | Auth |
 |---|---|---|
 | v4 read-only | `Games`, `Tags`, `Featured`, `Find`, `Detail`, `Related`, `Reviews` | anonymous |
-| v4 user | `Installed`, `My`, `Subscribe`, `Unsubscribe`, `Rate`, `Download` | required |
-| v4 write | `Publish`, `Delete`, `Report` | required |
-| v1 legacy | `Detail`, `FindAsUser`, `Installed`, `My`, `Flag`, `Install`, `Uninstall` | required |
+| v4 user | `Installed`, `My`, `Subscribe`, `Unsubscribe`, `Rate`, `Download`, `Download .../file` | required |
+| v4 write | `Publish`, `CheckAndPublishFile`, `Delete`, `Report` | required |
+| v1 legacy | `Detail`, `FindAsUser`, `Installed`, `My`, `Flag`, `Install`, `Uninstall`, `Create`, `Delete` | required |
 | Polls | `/Poll/list`, `/Poll/{pollId}` | required |
 | Moderation | `/textmoderation` | required |
+| MatchContent | `/api/MatchContent/`, `/{matchId}` and `/{matchId}/file/{hash}` (outside the spec) | anonymous |
+| Media | `/api/v4/mods/image/{name}` (outside the spec) | anonymous |
 | Ops | `/healthz` (outside the spec) | anonymous |
 
-Authentication is `Authorization: Steam1.0 <token>` or the
-`.AgeOfEmpiresServices` cookie. The Steam ticket is not verified
-cryptographically yet: any well-formed token creates a user, so do not expose
-this to the internet without a real check.
+Authentication is `Authorization: Steam1.0 <token>`, `Authorization: XBL3.0
+x=<puid>;<token>` or the `.AgeOfEmpiresServices` cookie. The AOE3 capture
+carries both game schemes in one session (Steam for the read endpoints, XBL
+for `My` and `Delete`): the ticket and the XToken are not verified
+cryptographically, so any well-formed credential creates a user keyed by its
+id; do not expose this to the internet without a real check.
 
 ## Behaviour worth knowing
 
@@ -79,6 +89,32 @@ this to the internet without a real check.
   `modid: 0`/`""` likewise; negative tag ids exclude.
 - **Counters**: `Subscribe` does not count, `Download` counts once per user, so
   the AOE4 pair (`Subscribe` + `Download`) does not double the counter.
+- **searchParams echo**: every list echoes the RESOLVED filter, not the raw
+  body. The AOM client's `Featured` with the body `{"game":1001}` answers
+  `{"q":"","creator":null,"filter":0,"sort":"popular","order":"DESC","start":1,
+  "count":10,"game":1001,"modid":"0"}` — the defaults filled per endpoint
+  (`My` answers the caller as the creator and its default count 10, `Installed`
+  answers creator "" and count 1000), the order upper-cased and the mod id
+  always as the JSON string (`"0"` when unset). The website sends its sort and
+  count explicitly (`Featured` holds `recentpopular`/3 that way), and any
+  explicit `My` count lands on the 500 maximum the captures echo (12, 1000 and
+  20000 all answer 500). The legacy v1 echo keeps the raw request instead,
+  modid null when absent.
+- **Related rows** carry `modTags` null, unlike `Find`/`My`/`Featured`, which
+  carry the tag names there; both shapes are what the captures show.
+- **Mod statuses**: only two pairs live across every capture -
+  `modStatusId 2`/"Published" (all the created mods) and `modStatusId 5`/"Featured"
+  (the AOM `Featured` rows and the featured 286553 detail). `Featured` lists the
+  status-5 mods of the game, the echoed name filter resolves "featured" to 5, and
+  every other stored id renders "Published". A list row whose `modTypeId` does
+  not resolve in the Tags catalog of its game answers `"modType": "Unknown"`
+  (the type 1 of game 1001) while the `Detail` of the same mod answers null.
+- **Ratings** render one decimal: the AOM `Rate` of a 125-rating mod answers
+  average 4.1, so the stored aggregate and both surfaces keep the rounded form.
+- **textmoderation** answers the detected language of the text, not the echo
+  of the input (`"Test Mod"` answers `en` even with `es-ES` as the input).
+  The base subtag of the input language is the deterministic stand-in, since
+  a real detector is not worth a dependency.
 - **CORS**: the website sends a preflight before every POST. The middleware
   answers it with 204 before the mux and never uses a wildcard origin while
   credentials are allowed.
@@ -88,21 +124,116 @@ this to the internet without a real check.
 - **Publish** takes `multipart/form-data` and answers
   `{"errorCode":0,"errorMessage":"0","resultKey":"ModId","resultValue":"<id>"}`.
   `modId` present means update, absent means create; both are creator-only.
-  `modStatusId` is derived from `modVisibility` (Public 1, Unlisted 3, Private
-  4), which is an assumption: no capture shows the two fields together.
+  A created mod takes its id from the reserved local band
+  `[1,000,000,000, 2^31-1)` (`models.LocalModIDFloor`), which the official
+  namespace - the upstream scrape peaks at 593,695 - can never reach, so the
+  same numeric id cannot mean two different mods when a client switches
+  between this server and the live one. The band only ever advances:
+  deleting a mod does not recycle its id.
+  `modStatusId` is always the published 2 — the created-mod capture of the
+  AOE2 logs answers `2`/`Published` for an `Unlisted` visibility and every
+  live detail shows the same pair, so visibility and status are independent.
   `modTags` is accepted as repeated fields or as one comma-separated value, and
   every tag is checked against `mod_types` for the game, so an unknown tag is a
   400 rather than a foreign-key error. `ImageMetaData` entries are paired with
   the `modImages` parts by file name; an entry without an upload keeps the
   thumbnail the client sent, which is how an update reuses an existing image.
+  The AOE4 client shapes the same body differently, and all of it is accepted:
+  `modName` and `description` arrive as JSON localization maps
+  (`{"es":"moddisplayname"}`) and are stored as their plain string (the `"en"`
+  entry wins, otherwise the first entry in the order the client wrote); the
+  visibility arrives lowercase (`public`); `clientId` is accepted and left
+  null; the changeList can be absent, which stores an empty string instead of
+  the wrapped header. An update publish that carries no `modVersion` bumps the
+  stored version by 0.1 (the AOE4 capture moves 1.1 to 1.2), and the Detail of
+  a subscriber whose installed version predates it flips `updateAvailable` to
+  true - re-installing clears it again. The Detail always renders `modTags`
+  null (both created-mod captures do, with `modTagIds [26]` filled) - only the
+  list rows carry the tag names there.
+- **CheckAndPublishFile** (`PUT /api/v4/mods/CheckAndPublishFile`) is the Azure
+  Block Blob flow the AOE4 client uploads the archive with right after Publish.
+  One request per block, then a commit, both answering the bare `true`:
+  `?comp=block&blockid=00000000&modId=N` carries the raw file bytes as the body
+  (staged under `UploadDir/blocks/<modId>/`), and
+  `?comp=blocklist&modId=N` carries
+  `<?xml…?><BlockList><Latest>00000000</Latest></BlockList>`. The commit
+  concatenates the listed blocks in order, stores them as the mod file under
+  the CRC32 name (the same storage Publish uses), fills `fileUrl`, `fileCRC`,
+  `modFileSize` and `modDiskSize` (the capture shows them equal: 1509669
+  both), stamps `lastUpdate` with the commit time of the capture and answers
+  `true`. Both requests require authentication, the commit also requires the
+  caller to own the mod, and the route is exempt from `Server.MaxBodyBytes`
+  with its own 512 MiB block cap, since the capture's single block is already
+  1.5 MB.
+- **Create (v1)** is the AOE2 client flow of the same idea: a multipart form
+  whose fields are spelled differently (`ModName`, `GameTitleId`, `ModType`,
+  `Description`, `modVisibility`, `ChangeList`, `ImageMetaData` with a string
+  `imageFileSize`, `modImages`, `modFiles` — that casing is read
+  case-insensitively). A body with `ModId` of the caller's mod UPDATES it and
+  answers the same id - the AOE2 client re-publishes through this endpoint
+  (the launcher log of November 19 shows the update carrying the stored image
+  identity and no file parts), and handin new ids there crashed the game on
+  every update, so it is what the endpoint's update mode pins: same id, the
+  +0.1 version tick and the updateAvailable flip, the changeList rewrapped,
+  and the stored image untouched when the body only re-declares its identity.
+  Its create side effects, pinned by the capture of the created
+  `test_mod` (593779): the status stays Published (2); the stored `modVersion`
+  is zero and only the v4 Detail renders it as 1.1; `verifiedVersion` starts unset (the v1 rows answer null and the v4 Detail an empty string); the description is mirrored into `modDescription`; the changeList is
+  stored prefixed with the update-date header of the day —
+  `<h4 class="mod-update-date">11/18/2026</h4><p>changelog</p>`; the creator
+  counts as its first download and install (popular and both counters start at
+  1, and `userDownloaded`/`userInstalled` are true); the first uploaded image
+  becomes the thumbnail; `modDiskSize` is the uncompressed size of the
+  archive; and a create without explicit tags gets `Other` (26) even when the
+  game's catalog does not sell it — the AOE4 created mod answers
+  `modTagIds [26]` with an empty `modTagNames`, so the id renders without a
+  name there. `modDiskSize` and the storage of `modTypeId` need no
+  catalog lookup: the upstream accepts a `ModType` its Tags catalog does not
+  sell (the capture created game 2 with `ModType` 1, and the AOE4 client
+  uploads type 6 — `Extension` — whose name the server still resolves), so
+  the column is a join hint, not a foreign key.
+- **Delete (v1)** and **Delete (v4)**: the legacy endpoint answers
+  `{"errorCode":0,"errorMessage":"0","resultKey":"Deleted","resultValue":"true","resultJson":null}`
+  for `{"id":N}`; the v4 one answers the bare `true` for `{"modId":N}`. Both
+  remove the mod and, through `ON DELETE CASCADE`, its tags, images,
+  reviews, ratings, installs and reports. Only the creator may delete, and a
+  mod without a creator cannot be deleted by anyone.
+- **Missing resources**: the v4 `Detail` of a deleted or unknown mod answers
+  the RFC 9110 `ProblemDetails` body of the web server
+  (`{"type":"…/html/rfc9110#section-15.5.5","title":"Not Found","status":404,
+  "traceId":"00-…"}`) in place of the mod error envelope, and the v4
+  `Related` of one answers `204 No Content` — both are the answers of the
+  captures of the deleted `test_mod`.
+- **The legacy v1 row shape** differs from the v4 one for the same mods, and
+  the v1 endpoints reproduce it: the lists carry the tags as string ids in
+  `modTags` with `modTagIds` null, `ratings` null, the rating aggregates zero
+  (`currentRating` 0.0), `changeList` null, `popular` null, and `totalCount`
+  null on an empty page (and always in `My`). The legacy `Detail` is a sparse
+  outer object — identity, texts, type, status and the image list, with every
+  viewer field, date, size and counter null or zero, and `isLoggedOn` false
+  even for the owner — wrapped around the real render nested in `metaData`,
+  snapshot included.
 - **Uploads**: `Publish` stores the archive and the screenshots under
   `[Storage] UploadDir` (default `uploads`). The stored name is the CRC32 of the
   content plus the original extension, so uploading the same bytes twice does
   not duplicate the file. An empty `UploadDir` rejects any publish that carries
   a file with a 500.
-- **Delete** removes the mod and, through `ON DELETE CASCADE`, its tags, images,
-  reviews, ratings, installs and reports. Only the creator may delete, and a mod
-  without a creator cannot be deleted by anyone.
+- **MatchContent**: the game posts a multiplayer savegame or replay as multipart
+  (`fileContent` + `matchId`) and later asks for the metadata, which carries an
+  absolute `filePath`; a second GET streams the bytes. The upload is streamed to
+  disk and never buffered, only the extensions the games use are accepted, and
+  `[MatchContent]` bounds the per-file size, the accumulated size (the oldest
+  file is evicted first) and the TTL. The route is exempt from
+  `Server.MaxBodyBytes` because a savegame is measured in megabytes; the store
+  applies its own limit. The path parameter is a `matchId` and the file URL also
+  carries the MD5, so metadata from before an overwrite cannot fetch the new
+  bytes.
+- **Download** answers the absolute URL of `/api/v4/Mods/Download/{modId}/file`, which streams the stored
+  archive from `[Storage] UploadDir`. That route does not count a download: the counter belongs to the JSON
+  endpoint. `imageThumbnail` and `imageName` are emitted as absolute URLs of `/api/v4/mods/image/{name}` (both
+  refer to the same stored image in the captures), and the `fileUrl` of a Detail is the absolute download URL,
+  because the upstream answer carries URLs everywhere and a bare name is unreachable for the client. A value that is
+  already a URL passes through untouched, so a seeded mod keeps its captured CDN address.
 - **Report** stores the concern in `mod_reports` and answers the bare `true`.
   Every field is a string in the capture, including `modId`, unlike `Delete`.
 
@@ -115,9 +246,10 @@ internal/cmd/              flags, config, listener, shutdown, --new-session
 internal/config.go         koanf/TOML + environment + pflag
 internal/http.go           Bind, JSON, Json[T], H, A
 internal/logger/           console + file logger, credential redaction
-internal/models/           SQLite schema, stores, seed
+internal/models/           SQLite schema, stores, seed, match file store
 internal/routes/router/    Group over ServeMux + middlewares
 internal/routes/shared/    DTOs, FlexInt, pagination, download URL
+internal/routes/matchcontent/   /api/MatchContent endpoints
 internal/routes/api/mods/v4/   one file per /api/v4/mods endpoint
 internal/routes/api/mods/v1/   one file per /api/v1/mods endpoint
 internal/routes/poll/          /poll endpoints
@@ -147,11 +279,15 @@ exceptions, because they are infrastructure rather than endpoints.
    `GET /api/v4/mods/Tags`: 56 rows over 22 distinct `modTypeId` values. The id
    is global, not per game, so the same id carries different names in different
    titles (1 is "Single-player scenarios" in game 1 and "Crafted Map" in game
-   4). The table is therefore keyed on `(gameTitleId, modTypeId)`, and `mods`
-   and `mod_tag_map` reference that pair. `testdata/tags.json` holds the
+   4). The table is therefore keyed on `(gameTitleId, modTypeId)`, and
+   `mod_tag_map` references that pair. `mods.modTypeId` does not: the live
+   Create accepted a `ModType` the Tags catalog does not sell, so the column
+   is a join hint, not a foreign key. `testdata/tags.json` holds the
    upstream body and the test compares against it byte for byte.
-5. **`modStatusId` mapping** (1 Published, 2 Featured, 3 Unlisted, 4 Draft) is a
-   working assumption, kept as a Go constant so it can be corrected without a
+5. **`modStatusId` mapping**: the created mod of the AOE2 captures answers
+   `2`/`Published` for an Unlisted visibility, and every live detail shows the
+   same pair, so `Published` is 2. The other three names guess the remaining
+   slots and remain a constant that a capture can correct without a
    migration.
 
 ## Upstream drift between the August and November captures
@@ -182,20 +318,39 @@ captures are easy to miss and are pinned by tests:
 
 `Related` is a fixed page: `start` 0, `count` 6, `modid` as a string and a
 `totalCount` equal to the size of that page, unlike `Find`, which echoes the
-request it received.
+request it received. The AOE2 captures of a deleted mod add two answers this
+server honours: the `Related` of a missing mod is `204 No Content` instead of
+an error body, and the v4 `Detail` of one
+is the RFC 9110 `ProblemDetails` of the web server.
 
-Two deviations are deliberate. `isLoggedOn` reports the real session on the list
-endpoints, where every capture says `false` even for `My` and `Installed` called
-with a valid cookie; reporting the truth is a superset of that. And `createDate`
-is stored and emitted as RFC 3339 (`2026-11-11T20:41:14Z`) where the capture
-carries `2026-11-11T20:41:14.543`, the same instant without the zone marker.
+Two deviations are deliberate. `isLoggedOn` reports the real session on the v4
+list endpoints, where the August/November captures say `false` even for `My`
+and `Installed` called with a valid cookie; reporting the truth is a superset
+of that — and the AOE2 v1 captures agree, their lists say `true`. And the
+`createDate` of a seeded mod keeps the value it was seeded with, which may be
+RFC 3339; a mod this server publishes is stamped with the capture format
+(`2026-11-18T22:07:21.043`), the millisecond instant without the zone marker.
+
+## The AOE2 captures
+
+The `api_aoe2` folder captures the AOE2 client and the website against the
+live service (2026-11-11 and 2026-11-18) and pins what was missing from the
+web captures: the legacy `Create`, the legacy `Delete`, the legacy row shape
+of the lists and of `Detail` (sparse wrapper around the `metaData` snapshot),
+and the answers for a missing or deleted mod. `TestCreateMatchesTheLegacyCapture`
+walks the whole lifecycle — create, detail lookup from both versions, install,
+my list, delete and the two post-delete answers — and asserts each one against
+the captured bytes.
 
 ## Database compatibility
 
-`schemaVersion` is 3. `Migrate` only creates missing objects, so a database
+`schemaVersion` is 5. `Migrate` only creates missing objects, so a database
 created with the previous single-column `mod_types` key is not upgraded: the
 seed detects the partial catalog and refuses to start, asking for the file to be
-deleted. There is no data to preserve in a fresh deployment.
+deleted. Version 4 also drops the `mods.modTypeId` foreign key, which an older
+database keeps; it only constrains the columns a fresh database creates without.
+Version 5 adds the `mod_id_allocator` of the locally published id band. There is
+no data to preserve in a fresh deployment.
 
 ## Open question: anonymous read-only endpoints
 

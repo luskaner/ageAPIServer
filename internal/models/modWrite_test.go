@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 )
 
 // seedUser returns the id of the user seedMods attaches to its mods.
@@ -173,8 +174,8 @@ func TestPublishCreatesAMod(t *testing.T) {
 	if detail.ModName != "The Roman Dawn" || detail.ModVisibility == nil || *detail.ModVisibility != "Private" {
 		t.Fatalf("detail = %+v", detail)
 	}
-	if detail.ModStatusID != 4 {
-		t.Fatalf("status = %d, want 4 (Draft) for a Private mod", detail.ModStatusID)
+	if detail.ModStatusID != 2 {
+		t.Fatalf("status = %d, want 2 (Published) for a Private mod", detail.ModStatusID)
 	}
 	if detail.FileURL == nil || *detail.FileURL != "abc.zip" {
 		t.Fatalf("fileUrl = %v", detail.FileURL)
@@ -215,9 +216,9 @@ func TestPublishUpdatesAMod(t *testing.T) {
 	if detail.ModName != "Chieftains v2" {
 		t.Fatalf("name = %q", detail.ModName)
 	}
-	// An empty visibility falls back to Public, which is Published.
-	if detail.ModStatusID != 1 {
-		t.Fatalf("status = %d, want 1", detail.ModStatusID)
+	// An empty visibility falls back to Public, which stays Published (2).
+	if detail.ModStatusID != 2 {
+		t.Fatalf("status = %d, want 2", detail.ModStatusID)
 	}
 	if len(detail.ModTagIDs) != 1 || detail.ModTagIDs[0] != 16 {
 		t.Fatalf("tags = %+v, want only 16", detail.ModTagIDs)
@@ -281,11 +282,13 @@ func TestPublishRejectsBadInput(t *testing.T) {
 }
 
 func TestStatusForVisibility(t *testing.T) {
-	cases := map[string]int64{"Public": 1, "Unlisted": 3, "Private": 4}
-	for visibility, want := range cases {
+	// Every visibility maps to Published (2): the capture of a created
+	// Unlisted mod answers modStatusId 2.
+	cases := map[string]bool{"Public": true, "Unlisted": true, "Private": true}
+	for visibility := range cases {
 		got, ok := statusForVisibility(visibility)
-		if !ok || got != want {
-			t.Fatalf("%s = %d/%v, want %d", visibility, got, ok, want)
+		if !ok || got != 2 {
+			t.Fatalf("%s = %d/%v, want 2", visibility, got, ok)
 		}
 	}
 	if _, ok := statusForVisibility("Secret"); ok {
@@ -303,5 +306,105 @@ func TestNullableIDAndUniqueIDs(t *testing.T) {
 	got := uniqueIDs([]int64{3, 0, -1, 3, 4})
 	if len(got) != 2 || got[0] != 3 || got[1] != 4 {
 		t.Fatalf("uniqueIDs = %v", got)
+	}
+}
+
+func TestWrapChangeList(t *testing.T) {
+	// The capture of a created mod wraps the client changeList with the
+	// update-date header of the day.
+	got := WrapChangeList("<p>changelog</p>", time.Date(2026, 11, 18, 22, 7, 15, 0, time.UTC))
+	if want := `<h4 class="mod-update-date">11/18/2026</h4><p>changelog</p>`; got != want {
+		t.Fatalf("WrapChangeList = %q, want %q", got, want)
+	}
+	if got := WrapChangeList("   ", time.Date(2026, 11, 18, 22, 7, 15, 0, time.UTC)); got != "   " {
+		t.Fatalf("WrapChangeList(blank) = %q, want it unchanged", got)
+	}
+	if got := WrapChangeList("", time.Date(2026, 11, 18, 22, 7, 15, 0, time.UTC)); got != "" {
+		t.Fatalf("WrapChangeList(empty) = %q, want it unchanged", got)
+	}
+}
+
+func TestPublishAllocatesFromTheReservedBand(t *testing.T) {
+	stores := newStores(t)
+	ctx := context.Background()
+	userID := seedUser(t, stores)
+
+	first, err := stores.Mods.Publish(ctx, PublishInput{GameTitleID: 2, ModName: "First", CreatorID: userID})
+	if err != nil {
+		t.Fatalf("publish first: %v", err)
+	}
+	second, err := stores.Mods.Publish(ctx, PublishInput{GameTitleID: 2, ModName: "Second", CreatorID: userID})
+	if err != nil {
+		t.Fatalf("publish second: %v", err)
+	}
+	if first < LocalModIDFloor || first >= LocalModIDLimit ||
+		second < LocalModIDFloor || second >= LocalModIDLimit {
+		t.Fatalf("mod ids %d and %d are outside the band [%d, %d)",
+			first, second, LocalModIDFloor, LocalModIDLimit)
+	}
+	if second <= first {
+		t.Fatalf("mod ids %d then %d are not increasing", first, second)
+	}
+}
+
+func TestPublishDoesNotRecycleADeletedLocalID(t *testing.T) {
+	stores := newStores(t)
+	ctx := context.Background()
+	userID := seedUser(t, stores)
+
+	first, err := stores.Mods.Publish(ctx, PublishInput{GameTitleID: 2, ModName: "First", CreatorID: userID})
+	if err != nil {
+		t.Fatalf("publish first: %v", err)
+	}
+	second, err := stores.Mods.Publish(ctx, PublishInput{GameTitleID: 2, ModName: "Second", CreatorID: userID})
+	if err != nil {
+		t.Fatalf("publish second: %v", err)
+	}
+	if err := stores.Mods.Delete(ctx, userID, second); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	next, err := stores.Mods.Publish(ctx, PublishInput{GameTitleID: 2, ModName: "Third", CreatorID: userID})
+	if err != nil {
+		t.Fatalf("publish third: %v", err)
+	}
+	if next <= second || next == second {
+		t.Fatalf("id %d would reuse or step back on deleted id %d", next, second)
+	}
+	if next == first {
+		t.Fatalf("id %d reuses surviving mod %d", next, first)
+	}
+	if next < LocalModIDFloor || next >= LocalModIDLimit {
+		t.Fatalf("mod id %d is outside the band", next)
+	}
+}
+
+func TestAllocatorJumpsPastSidewaysBandImports(t *testing.T) {
+	stores := newStores(t)
+	ctx := context.Background()
+	userID := seedUser(t, stores)
+
+	// A mod inside the band that Publish did not hand out (a restored backup):
+	// the allocator must step past it, not hand the id out again.
+	sideways := LocalModIDFloor + 50
+	if err := stores.Mods.Upsert(ctx, ModInput{ModID: sideways, GameTitleID: 2, ModName: "Backup"}); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	got, err := stores.Mods.Publish(ctx, PublishInput{GameTitleID: 2, ModName: "Fresh", CreatorID: userID})
+	if err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	if got <= sideways {
+		t.Fatalf("allocator handed out %d, must be past %d", got, sideways)
+	}
+}
+
+func TestUpsertRejectsIdsBeyondTheBand(t *testing.T) {
+	stores := newStores(t)
+	ctx := context.Background()
+	if err := stores.Mods.Upsert(ctx, ModInput{ModID: LocalModIDLimit + 1, GameTitleID: 2, ModName: "Too big"}); !errors.Is(err, ErrValidation) {
+		t.Fatalf("upsert beyond the band: %v, want ErrValidation", err)
+	}
+	if err := stores.Mods.Upsert(ctx, ModInput{ModID: LocalModIDLimit, GameTitleID: 2, ModName: "Edge"}); err != nil {
+		t.Fatalf("upsert at the band edge: %v", err)
 	}
 }
