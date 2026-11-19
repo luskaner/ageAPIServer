@@ -8,10 +8,10 @@ ageAPIServer.db
 *.log
 
 # Binaries
-ageAPIServer
-ageAPIServer.exe
-ageapiserver
-ageapiserver.exe
+/ageAPIServer
+/ageAPIServer.exe
+/ageapiserver
+/ageapiserver.exe
 *.test
 
 # Uploads of Publish
