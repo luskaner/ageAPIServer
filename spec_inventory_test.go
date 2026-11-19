@@ -20,11 +20,11 @@ func normalizeSpecPath(path string) string {
 	return strings.TrimSuffix(strings.ToLower(path), "/")
 }
 
-// inventoryOnly are served by this server but are not in the official spec:
-// they are local Ops additions.
-var inventoryOnly = map[string]bool{
-	"GET /openapi.yml": true,
-}
+// inventoryOnly would hold routes the server registers but the spec does not
+// document. It is empty and meant to stay that way: even the local Ops
+// endpoints (/healthz, /openapi.yml) are in api_spec.yml as implementation
+// endpoints, so the bidirectional check below covers every route.
+var inventoryOnly = map[string]bool{}
 
 // TestOpenAPISpecIsServedFromTheBinary pins the embedded spec: the body is the
 // file byte for byte, under the YAML content type.

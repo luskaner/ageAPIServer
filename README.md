@@ -114,7 +114,7 @@ without unpacking the archive.
 | Moderation | `/textmoderation` | required |
 | MatchContent | `/api/MatchContent/`, `/{matchId}` and `/{matchId}/file/{hash}` | anonymous |
 | Media | `/api/v4/mods/image/{name}` | anonymous |
-| Ops | `/healthz`, `/openapi.yml` | anonymous |
+| Ops (local, not upstream) | `/healthz`, `/openapi.yml` | anonymous |
 
 Authentication is `Authorization: Steam1.0 <token>`, `Authorization: XBL3.0
 x=<puid>;<token>` or the `.AgeOfEmpiresServices` cookie. The AOE3 capture

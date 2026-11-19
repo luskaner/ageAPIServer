@@ -22,10 +22,12 @@ info:
     `api-dr.ageofempires.com`, not only downloads; other clients use
     `api.ageofempires.com`. Both hosts serve the same API.
 
-    Implementation endpoints: the Media (`/api/v4/mods/Image/...`), MatchContent
-    (`/api/MatchContent/...`) and Ops (`/healthz`) operations are served by this
-    implementation but were not part of the observed upstream surface. They are
-    documented so the spec covers every route the server registers.
+    Implementation endpoints: the Media (`/api/v4/mods/Image/...`) and
+    MatchContent (`/api/MatchContent/...`) operations are served by this
+    implementation but were not part of the observed upstream surface,
+    and the Ops routes (`/healthz` and `/openapi.yml`) are entirely local
+    to this server: upstream has neither. They are documented so the
+    spec covers every route the server registers.
   contact:
     name: Age of Empires API
     url: https://www.ageofempires.com
@@ -3077,13 +3079,14 @@ paths:
         '404':
           description: Match content store disabled, file not found or hash mismatch
 
-  # Ops
+  # Ops: local routes of this server, not part of the upstream service.
   /healthz:
     get:
       tags:
         - Ops
       summary: Health probe
       description: |
+        Local endpoint of this server; upstream does not have it.
         Pings the database. Answers {"status":"ok"} on success and
         {"status":"unavailable"} with 503 when the database is unreachable.
         Anonymous.
@@ -3110,4 +3113,25 @@ paths:
                   status:
                     type: string
                     example: unavailable
+
+  /openapi.yml:
+    get:
+      tags:
+        - Ops
+      summary: The served API description
+      description: |
+        Local endpoint of this server; upstream does not have it. Serves
+        this very document, embedded in the binary, so a client generator
+        or a proxy can read it from the running server without the
+        release archive. The body is the file byte for byte, under
+        application/yaml. Anonymous.
+      operationId: getOpenApiSpec
+      security: []
+      responses:
+        '200':
+          description: The OpenAPI document, byte for byte
+          content:
+            application/yaml:
+              schema:
+                type: string
 

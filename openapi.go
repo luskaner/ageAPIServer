@@ -12,9 +12,10 @@ import (
 //go:embed api_spec.yml
 var specYAML []byte
 
-// openAPISpec serves the embedded api_spec.yml. It is an Ops addition: the
-// official service does not expose its own spec, so the route is not in
-// api_spec.yml and the inventory test lists it as local-only.
+// openAPISpec serves the embedded api_spec.yml. It is a local Ops endpoint:
+// the upstream service never publishes its own spec, and api_spec.yml
+// documents the route (along with /healthz) as an implementation endpoint,
+// which the inventory test cross-checks like any other.
 func openAPISpec(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/yaml; charset=utf-8")
 	_, _ = w.Write(specYAML)
