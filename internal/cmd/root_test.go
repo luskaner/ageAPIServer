@@ -329,8 +329,12 @@ func TestListenAndServeReportsAFailedBind(t *testing.T) {
 }
 
 func TestListenAndServeReportsAnUnusableDatabase(t *testing.T) {
+	// A directory refuses to open as SQLite on every platform: the earlier
+	// one-byte file fixture was rejected on Windows but accepted as a fresh
+	// database on Linux, where the listener then served (and the test hung)
+	// instead of failing.
 	blocker := filepath.Join(t.TempDir(), "blocker")
-	if err := os.WriteFile(blocker, []byte("x"), 0o644); err != nil {
+	if err := os.Mkdir(blocker, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	cfg := i.DefaultConfig()

@@ -317,9 +317,14 @@ func TestLoadGCReferencesReportsABrokenSchema(t *testing.T) {
 }
 
 func TestUploadGCReportsAnUnusableDatabase(t *testing.T) {
+	// The directory refuses to open as SQLite everywhere: a tiny file
+	// served as the fixture before, and Linux accepted it as a fresh
+	// database, which made this pass on Windows only.
 	dir := t.TempDir()
 	blocker := filepath.Join(dir, "blocker")
-	writeFile(t, blocker, "x")
+	if err := os.Mkdir(blocker, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	cfg := i.DefaultConfig()
 	cfg.DB.Path = blocker
 	cfg.Storage.UploadDir = dir
