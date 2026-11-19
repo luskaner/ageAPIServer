@@ -3,42 +3,36 @@ info:
   title: Age of Empires Mods API
   version: "1.0.0"
   description: |
-    OpenAPI specification for the Age of Empires Mods API (api.ageofempires.com).
-    This API provides access to mod browsing, management, and download functionality
-    for Age of Empires DE, Age of Empires II DE, Age of Empires III DE, Age of Empires IV,
-    and Age of Mythology: Retold.
+    OpenAPI specification of ageAPIServer, the Go reimplementation of the
+    Age of Empires Mods API: mod browsing, management and download
+    functionality for Age of Empires DE, Age of Empires II DE, Age of
+    Empires III DE, Age of Empires IV, and Age of Mythology: Retold.
 
     Authentication: game clients send a Steam bearer token (`Authorization: Steam1.0 ...`).
     The website (www.ageofempires.com) calls the same API with its session cookie instead.
-    Read-only endpoints (games, tags, featured, find, detail, related, reviews) were
-    observed working anonymously.
+    Operations that declare no scheme are anonymous.
 
-    Path matching: the service resolves paths case-insensitively and treats trailing
+    Path matching: this server resolves paths case-insensitively and treats trailing
     slashes as optional. Native clients call `/api/v4/Mods/...`; the website calls
     `/api/v4/mods/...` (including `/api/v4/mods/UnSubscribe/...`). Each operation is
     documented once, using the casing of the path key.
 
-    Hosts: the Age of Empires IV client sends every mod request to
-    `api-dr.ageofempires.com`, not only downloads; other clients use
-    `api.ageofempires.com`. Both hosts serve the same API.
+    Hosts: the clients are configured to reach `api.ageofempires.com`, and every
+    Age of Empires IV mod request (and the downloads of all clients) goes to
+    `api-dr.ageofempires.com`, so a deployment points those names at this
+    server.
 
     Implementation endpoints: the Media (`/api/v4/mods/Image/...`) and
-    MatchContent (`/api/MatchContent/...`) operations are served by this
-    implementation but were not part of the observed upstream surface,
-    and the Ops routes (`/healthz` and `/openapi.yml`) are entirely local
-    to this server: upstream has neither. They are documented so the
-    spec covers every route the server registers.
+    MatchContent (`/api/MatchContent/...`) operations are this server's own
+    surface, not a reimplementation of an observed upstream route, and the
+    Ops routes (`/healthz` and `/openapi.yml`) are entirely local as well.
+    They are documented so the spec covers every route the server registers.
   contact:
-    name: Age of Empires API
-    url: https://www.ageofempires.com
+    name: luskaner
+    url: https://github.com/luskaner
   license:
-    name: Proprietary
-    url: https://www.ageofempires.com/terms-of-use
-servers:
-  - url: https://api.ageofempires.com
-    description: Primary API server
-  - url: https://api-dr.ageofempires.com
-    description: Alternate host used by the Age of Empires IV client for all mod endpoints, and by all clients for downloads
+    name: AGPL-3.0-only
+    url: https://www.gnu.org/licenses/agpl-3.0.txt
 security:
   - SteamAuth: []
   - XblAuth: []
