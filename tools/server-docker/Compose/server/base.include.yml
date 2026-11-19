@@ -1,0 +1,39 @@
+services:
+  server:
+    environment:
+      - SERVER_ARGS=${SERVER_ARGS:-}
+      # Relative paths of the server resolve against the working directory; the
+      # writable ones live in named volumes so they survive a recreate.
+      - AGEAPISERVER_SERVER_ADDR=:8080
+      - AGEAPISERVER_DB_PATH=/app/data/ageAPIServer.db
+      - AGEAPISERVER_STORAGE_UPLOADDIR=/app/uploads
+      - AGEAPISERVER_LOG_FILE=/app/logs/ageAPIServer.log
+    build:
+      context: ../../../..
+      dockerfile: tools/server-docker/Dockerfile/server/Dockerfile
+      args:
+        VERSION: ${VERSION:-development}
+    restart: unless-stopped
+    volumes:
+      - config_server:/app/resources/config:ro
+      - certs:/app/resources/certificates
+      - uploads:/app/uploads
+      - logs:/app/logs
+      - data:/app/data
+      - type: bind
+        source: "./entrypoint.sh"
+        target: /app/entrypoint.sh
+        read_only: true
+    entrypoint: ["/bin/sh", "/app/entrypoint.sh"]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+volumes:
+  certs:
+  config_server:
+  uploads:
+  logs:
+  data:

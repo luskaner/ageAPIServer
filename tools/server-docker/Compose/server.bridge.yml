@@ -1,0 +1,4 @@
+name: ageAPIServer-server-bridge
+include:
+  - ./server/base.include.yml
+  - ./server/bridge.include.yml

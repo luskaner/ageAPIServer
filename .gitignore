@@ -13,10 +13,22 @@ ageAPIServer.exe
 ageapiserver
 ageapiserver.exe
 *.test
-/dist/
 
 # Uploads of Publish
 /uploads/
 
+# Certificate pair of the HTTPS listener (the key is secret)
+/resources/certificates/
+
+# GoReleaser output
+/dist/
+/.goreleaser.yaml
+
+# Local Go legacy toolchain downloaded for Windows 7 builds
+/.tools/
+
 # Local implementation plan (kept out of the repository on purpose)
 ageAPIServer-implementation.md
+
+# IDE folders
+/.idea/

@@ -11,6 +11,25 @@ MaxBodyBytes = 1048576
 # X-Forwarded-Proto and X-Forwarded-Host headers of a reverse proxy.
 PublicBaseURL = ""
 
+# HTTPS. The listener serves plain HTTP by default, because the game clients
+# speak it; either terminate TLS here or let a proxy in front do it.
+#
+#   off   - plain HTTP (default)
+#   on    - this process terminates TLS with the pair below
+#   proxy - an external HTTPS terminator forwards to this process: absolute
+#           URLs are https unless X-Forwarded-Proto says otherwise
+[Server.TLS]
+Mode = "off"
+
+# Folder holding cert.pem and key.pem. Empty means resources/certificates next
+# to the executable, created on first use. The pair is never generated here:
+# bring your own (a CA issued one, or any self-signed pair your clients trust).
+Folder = ""
+
+# Overrides of the file names inside Folder.
+Cert = ""
+Key = ""
+
 [DB]
 Path = "ageAPIServer.db"
 BusyTimeoutMs = 5000
@@ -39,13 +58,6 @@ MaxAge = "600s"
 Base = "page"
 DefaultCount = 30
 MaxCount = 20000
-
-[Auth]
-# The spec declares Games, Tags, Featured, Find, Detail, Related and Reviews
-# anonymous, and that is the default. A live probe of api.ageofempires.com
-# answered 401 on all of them except Games and Tags; set this to true to match
-# that behaviour once it is confirmed.
-RequireForReadOnly = false
 
 [Storage]
 # Where Publish writes the mod archive and its screenshots. Empty rejects any

@@ -1,0 +1,4 @@
+name: ageAPIServer-server-proxy-bridge
+include:
+  - ./server/base.include.yml
+  - ./server/proxy.bridge.include.yml

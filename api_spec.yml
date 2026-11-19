@@ -21,6 +21,11 @@ info:
     Hosts: the Age of Empires IV client sends every mod request to
     `api-dr.ageofempires.com`, not only downloads; other clients use
     `api.ageofempires.com`. Both hosts serve the same API.
+
+    Implementation endpoints: the Media (`/api/v4/mods/Image/...`), MatchContent
+    (`/api/MatchContent/...`) and Ops (`/healthz`) operations are served by this
+    implementation but were not part of the observed upstream surface. They are
+    documented so the spec covers every route the server registers.
   contact:
     name: Age of Empires API
     url: https://www.ageofempires.com
@@ -34,6 +39,7 @@ servers:
     description: Alternate host used by the Age of Empires IV client for all mod endpoints, and by all clients for downloads
 security:
   - SteamAuth: []
+  - XblAuth: []
   - WebSession: []
 tags:
   - name: Games
@@ -48,6 +54,12 @@ tags:
     description: Poll endpoints
   - name: Moderation
     description: Text moderation endpoint
+  - name: Media
+    description: Mod screenshots stored by Publish (implementation endpoint)
+  - name: MatchContent
+    description: Multiplayer savegame and replay exchange (implementation endpoint)
+  - name: Ops
+    description: Operational probes (implementation endpoint)
 components:
   securitySchemes:
     SteamAuth:
@@ -447,10 +459,55 @@ components:
 
     InstalledModsRequest:
       description: |
-        Same filters as the Find request. Native clients usually send only `game`
-        (AOE3, AOM), while the AOE4 client and the website send the full filter body.
-      allOf:
-        - $ref: '#/components/schemas/FindModsRequest'
+        Same filters as the Find request, except that the server default count
+        is 1000 rather than 30. Native clients usually send only `game` (AOE3,
+        AOM), while the AOE4 client and the website send the full filter body.
+      type: object
+      required:
+        - game
+      properties:
+        game:
+          type: integer
+        start:
+          type: integer
+          default: 1
+        count:
+          type: integer
+          default: 1000
+        order:
+          type: string
+          enum: ["", ASC, DESC, asc, desc]
+          default: desc
+        sort:
+          type: string
+          enum: ["", popular, createDate, lastUpdate, downloads, rating, recentpopular, subscribers, modName]
+          default: popular
+        q:
+          type: string
+          default: ""
+        filter:
+          type: integer
+          default: 0
+        creator:
+          type: string
+          nullable: true
+          description: The echo resolves it to "" when the body omits it.
+        modid:
+          description: Mod ID filter; clients send either an integer (0 = none) or an empty string
+          oneOf:
+            - type: integer
+            - type: string
+        status:
+          type: string
+          nullable: true
+        tags:
+          description: Tag/type IDs; observed as integers, and as strings such as "-14"
+          type: array
+          items:
+            oneOf:
+              - type: integer
+              - type: string
+          nullable: true
 
     MyModsRequest:
       type: object
@@ -582,6 +639,7 @@ components:
           type: string
           example: "true"
         resultJson:
+          type: string
           nullable: true
 
     FeaturedModsRequest:
@@ -596,8 +654,10 @@ components:
           type: integer
           default: 1001
         modid:
-          type: integer
-          default: 0
+          description: Mod ID filter; clients send either an integer (0 = none) or an empty string
+          oneOf:
+            - type: integer
+            - type: string
         filter:
           type: integer
           default: 0
@@ -614,7 +674,7 @@ components:
         sort:
           type: string
           enum: [recentpopular, popular, createDate, lastUpdate]
-          default: recentpopular
+          default: popular
         order:
           type: string
           enum: [ASC, DESC]
@@ -624,7 +684,7 @@ components:
           default: 1
         count:
           type: integer
-          default: 3
+          default: 10
 
     # Response schemas
     SubscribeResponse:
@@ -957,8 +1017,637 @@ components:
       properties:
         errorCode:
           type: integer
+          description: |
+            Not an HTTP status: 400 for a bad request, 900 for an
+            unauthenticated request, 404 for a missing resource and 500 for an
+            internal error.
         errorMessage:
           type: string
+        isLoggedOn:
+          type: boolean
+          description: Only the 401 carries it (false); the other errors omit it.
+
+    ProblemDetails:
+      type: object
+      description: |
+        RFC 9110 body the v4 API answers with when the resource does not exist
+        (v4 Detail of a deleted mod, a CheckAndPublishFile commit of a missing
+        mod). traceId is a W3C trace id: two 16-byte and 8-byte random groups
+        between the version and flag bytes.
+      properties:
+        type:
+          type: string
+          format: uri
+          description: Link to the RFC 9110 section of the status.
+        title:
+          type: string
+        status:
+          type: integer
+        traceId:
+          type: string
+
+    # Legacy (v1) schemas. The v1 surface renders the same mods with a different
+    # contract than v4: fewer fields, different nullability, ratings dropped and
+    # tag ids rendered as strings.
+    LegacyMod:
+      description: One v1 modList row.
+      type: object
+      properties:
+        modId:
+          type: integer
+        gameTitleId:
+          type: integer
+          nullable: true
+          description: Always null in the v1 render.
+        gameTitleName:
+          type: string
+          nullable: true
+          description: Always null in the v1 render.
+        modName:
+          type: string
+        description:
+          type: string
+          nullable: true
+        modDescription:
+          type: string
+          nullable: true
+        changeList:
+          type: string
+          nullable: true
+          description: Always null in a v1 list.
+        modVersion:
+          type: number
+          description: As stored; the v1 surface applies no 1.1 default.
+        verifiedVersion:
+          type: string
+          nullable: true
+        modTypeId:
+          type: integer
+          nullable: true
+          description: Always null in the v1 render.
+        clientId:
+          type: string
+          nullable: true
+          description: Always null in the v1 render.
+        modType:
+          type: string
+          nullable: true
+        modTags:
+          type: array
+          items:
+            type: string
+          description: The tag ids rendered as strings.
+        modTagIds:
+          type: array
+          items:
+            type: integer
+          nullable: true
+          description: Always null; the ids live in modTags.
+        modTagNames:
+          type: array
+          items:
+            type: string
+          nullable: true
+        metaData:
+          nullable: true
+          description: Always null in a v1 list.
+        modStatusId:
+          type: integer
+          nullable: true
+          description: Always null in a v1 list.
+        modStatus:
+          type: string
+          nullable: true
+        modStatusMessage:
+          type: string
+          nullable: true
+          description: Always null in the v1 render.
+        modVisibility:
+          type: string
+          nullable: true
+        creatorId:
+          type: integer
+          nullable: true
+          description: Always null in the v1 render.
+        creatorName:
+          type: string
+          nullable: true
+        creatorAvatarUrl:
+          type: string
+          nullable: true
+        isOwner:
+          type: boolean
+        isLoggedOn:
+          type: boolean
+        allowDiscussion:
+          type: boolean
+        discourseUrl:
+          type: string
+          nullable: true
+        createDate:
+          type: string
+          format: date-time
+        lastUpdate:
+          type: string
+          format: date-time
+        updateAvailable:
+          type: boolean
+        modFileSize:
+          type: number
+          nullable: true
+        modDiskSize:
+          type: number
+          nullable: true
+          description: Always null in a v1 list.
+        popular:
+          type: integer
+          nullable: true
+          description: Always null in a v1 list.
+        downloads:
+          type: integer
+          nullable: true
+        installs:
+          type: integer
+          nullable: true
+        likes:
+          type: integer
+          nullable: true
+        userLiked:
+          type: boolean
+          nullable: true
+        ratings:
+          nullable: true
+          description: Always null in the v1 render.
+        currentRating:
+          type: number
+          description: Always 0 in the v1 render.
+        userDownloaded:
+          type: boolean
+          nullable: true
+        userInstalled:
+          type: boolean
+        userFlagged:
+          type: boolean
+          nullable: true
+        userRating:
+          type: number
+          nullable: true
+        userReview:
+          type: string
+          nullable: true
+        positiveRatings:
+          type: integer
+          description: Always 0 in the v1 render.
+        totalRatings:
+          type: integer
+          description: Always 0 in the v1 render.
+        thumbnail:
+          type: string
+        fileUrl:
+          type: string
+          nullable: true
+          description: Always null in a v1 list.
+        imageUrls:
+          type: array
+          items:
+            type: object
+            properties:
+              imageId:
+                type: string
+              displayIndex:
+                type: integer
+              imageName:
+                type: string
+              imageThumbnail:
+                type: string
+              imageFileSize:
+                type: number
+                nullable: true
+          nullable: true
+          description: Always null in a v1 list.
+        thirtyDayPopular:
+          type: integer
+          nullable: true
+          description: Always null in a v1 list.
+        sortName:
+          type: string
+          nullable: true
+          description: Always null in a v1 list.
+        sendNotifications:
+          type: boolean
+
+    LegacyModList:
+      type: object
+      properties:
+        searchParams:
+          $ref: '#/components/schemas/SearchParams'
+        modList:
+          type: array
+          items:
+            $ref: '#/components/schemas/LegacyMod'
+        totalCount:
+          type: integer
+          nullable: true
+          description: |
+            Null on an empty page, and always null for the v1 My endpoint.
+        isLoggedOn:
+          type: boolean
+        errorCode:
+          type: integer
+          description: -1 on success.
+        errorMessage:
+          type: string
+          description: Empty on success.
+
+    LegacyDetail:
+      description: |
+        The v1 Detail body. The outer object carries identity, texts, type,
+        status and the image list; every viewer field, date, size and counter is
+        null or zero, and isLoggedOn is false even for the owner. The nested
+        metaData snapshot carries the populated values.
+      type: object
+      properties:
+        modId:
+          type: integer
+        gameTitleId:
+          type: integer
+        gameTitleName:
+          type: string
+          nullable: true
+          description: Always null.
+        modName:
+          type: string
+        description:
+          type: string
+        modDescription:
+          type: string
+        changeList:
+          type: string
+        modVersion:
+          type: number
+        verifiedVersion:
+          type: string
+          nullable: true
+        modTypeId:
+          type: integer
+          nullable: true
+        clientId:
+          type: string
+          nullable: true
+          description: Always null.
+        modType:
+          type: string
+          nullable: true
+        modTags:
+          type: array
+          items:
+            type: string
+          description: The tag ids rendered as strings.
+        modTagIds:
+          type: array
+          items:
+            type: integer
+          nullable: true
+          description: Always null.
+        modTagNames:
+          type: array
+          items:
+            type: string
+          nullable: true
+        metaData:
+          nullable: true
+          allOf:
+            - $ref: '#/components/schemas/LegacyMeta'
+        modStatusId:
+          type: integer
+        modStatus:
+          type: string
+        modStatusMessage:
+          type: string
+        modVisibility:
+          type: string
+          nullable: true
+          description: Always null in the outer object.
+        creatorId:
+          type: integer
+          nullable: true
+          description: Always null in the outer object.
+        creatorName:
+          type: string
+          nullable: true
+          description: Always null in the outer object.
+        creatorAvatarUrl:
+          type: string
+          nullable: true
+          description: Always null in the outer object.
+        isOwner:
+          type: boolean
+          nullable: true
+          description: Always null; the snapshot carries the truth.
+        isLoggedOn:
+          type: boolean
+          description: Always false; the snapshot carries the truth.
+        allowDiscussion:
+          type: boolean
+        discourseUrl:
+          type: string
+          nullable: true
+        createDate:
+          type: string
+          format: date-time
+          nullable: true
+          description: Always null in the outer object.
+        lastUpdate:
+          type: string
+          format: date-time
+          nullable: true
+          description: Always null in the outer object.
+        updateAvailable:
+          type: boolean
+          nullable: true
+        modFileSize:
+          type: number
+          nullable: true
+          description: Always null in the outer object.
+        modDiskSize:
+          type: number
+          nullable: true
+          description: Always null in the outer object.
+        popular:
+          type: integer
+          nullable: true
+          description: Always null.
+        downloads:
+          type: integer
+          nullable: true
+          description: Always null in the outer object.
+        installs:
+          type: integer
+          nullable: true
+          description: Always null in the outer object.
+        likes:
+          type: integer
+          nullable: true
+          description: Always null in the outer object.
+        userLiked:
+          type: boolean
+          nullable: true
+          description: Always null in the outer object.
+        ratings:
+          nullable: true
+          description: Always null.
+        currentRating:
+          type: number
+          description: Always 0.
+        userDownloaded:
+          type: boolean
+          nullable: true
+        userInstalled:
+          type: boolean
+          nullable: true
+        userFlagged:
+          type: boolean
+          nullable: true
+        userRating:
+          type: number
+          nullable: true
+        userReview:
+          type: string
+          nullable: true
+        positiveRatings:
+          type: integer
+          description: Always 0.
+        totalRatings:
+          type: integer
+          description: Always 0.
+        thumbnail:
+          type: string
+          nullable: true
+          description: Always null in the outer object.
+        fileUrl:
+          type: string
+          nullable: true
+          description: Always null.
+        imageUrls:
+          type: array
+          items:
+            type: object
+            properties:
+              imageId:
+                type: string
+              displayIndex:
+                type: integer
+              imageName:
+                type: string
+              imageThumbnail:
+                type: string
+              imageFileSize:
+                type: number
+                nullable: true
+        thirtyDayPopular:
+          type: integer
+          nullable: true
+          description: Always null.
+        sortName:
+          type: string
+          nullable: true
+          description: Always null.
+        sendNotifications:
+          type: boolean
+
+    LegacyMeta:
+      description: |
+        The snapshot the v1 Detail nests in metaData. It keeps the viewer state,
+        sizes and counters, but never the changeList, the image list, the file,
+        the discussion block, the rating aggregates or the popularity fields.
+      type: object
+      properties:
+        modId:
+          type: integer
+        gameTitleId:
+          type: integer
+          nullable: true
+          description: Always null.
+        gameTitleName:
+          type: string
+          nullable: true
+          description: Always null.
+        modName:
+          type: string
+        description:
+          type: string
+          nullable: true
+        modDescription:
+          type: string
+          nullable: true
+        changeList:
+          type: string
+          nullable: true
+          description: Always null.
+        modVersion:
+          type: number
+        verifiedVersion:
+          type: string
+          nullable: true
+        modTypeId:
+          type: integer
+          nullable: true
+          description: Always null.
+        clientId:
+          type: string
+          nullable: true
+          description: Always null.
+        modType:
+          type: string
+          nullable: true
+        modTags:
+          type: array
+          items:
+            type: string
+        modTagIds:
+          type: array
+          items:
+            type: integer
+          nullable: true
+          description: Always null.
+        modTagNames:
+          type: array
+          items:
+            type: string
+          nullable: true
+        metaData:
+          nullable: true
+          description: Always null.
+        modStatusId:
+          type: integer
+          nullable: true
+          description: Always null.
+        modStatus:
+          type: string
+          nullable: true
+        modStatusMessage:
+          type: string
+          nullable: true
+          description: Always null.
+        modVisibility:
+          type: string
+          nullable: true
+        creatorId:
+          type: integer
+          nullable: true
+          description: Always null.
+        creatorName:
+          type: string
+          nullable: true
+        creatorAvatarUrl:
+          type: string
+          nullable: true
+        isOwner:
+          type: boolean
+          nullable: true
+        isLoggedOn:
+          type: boolean
+        allowDiscussion:
+          type: boolean
+          description: Always false.
+        discourseUrl:
+          type: string
+          nullable: true
+          description: Always null.
+        createDate:
+          type: string
+          format: date-time
+          nullable: true
+        lastUpdate:
+          type: string
+          format: date-time
+          nullable: true
+        updateAvailable:
+          type: boolean
+          nullable: true
+        modFileSize:
+          type: number
+          nullable: true
+        modDiskSize:
+          type: number
+          nullable: true
+        popular:
+          type: integer
+          nullable: true
+          description: Always null.
+        downloads:
+          type: integer
+          nullable: true
+        installs:
+          type: integer
+          nullable: true
+        likes:
+          type: integer
+          nullable: true
+        userLiked:
+          type: boolean
+          nullable: true
+        ratings:
+          nullable: true
+          description: Always null.
+        currentRating:
+          type: number
+          description: Always 0.
+        userDownloaded:
+          type: boolean
+          nullable: true
+        userInstalled:
+          type: boolean
+          nullable: true
+        userFlagged:
+          type: boolean
+          nullable: true
+        userRating:
+          type: number
+          nullable: true
+        userReview:
+          type: string
+          nullable: true
+        positiveRatings:
+          type: integer
+          description: Always 0.
+        totalRatings:
+          type: integer
+          description: Always 0.
+        thumbnail:
+          type: string
+        fileUrl:
+          type: string
+          nullable: true
+          description: Always null.
+        imageUrls:
+          type: array
+          items:
+            type: object
+            properties:
+              imageId:
+                type: string
+              displayIndex:
+                type: integer
+              imageName:
+                type: string
+              imageThumbnail:
+                type: string
+              imageFileSize:
+                type: number
+                nullable: true
+          nullable: true
+        thirtyDayPopular:
+          type: integer
+          nullable: true
+          description: Always null.
+        sortName:
+          type: string
+          nullable: true
+          description: Always null.
+        sendNotifications:
+          type: boolean
+
 paths:
   # Games
   /api/v4/mods/Games:
@@ -968,7 +1657,6 @@ paths:
       summary: Get list of supported games
       description: Returns all games that support mods
       operationId: getGames
-      security: []
       responses:
         '200':
           description: Successful response
@@ -977,7 +1665,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/GameList'
         '401':
-          description: Unauthorized - Invalid or missing Steam token
+          description: Unauthorized
         '500':
           description: Internal server error
 
@@ -987,9 +1675,17 @@ paths:
       tags:
         - Tags
       summary: Get all mod tags/types
-      description: Returns all mod types grouped by game
+      description: Returns all mod types grouped by game. The optional `game`
+        query parameter narrows the catalog; without it every game's tags are
+        returned.
       operationId: getTags
-      security: []
+      parameters:
+        - name: game
+          in: query
+          required: false
+          schema:
+            type: integer
+          description: Game title id whose tags are returned
       responses:
         '200':
           description: Successful response
@@ -997,6 +1693,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ModTagList'
+        '400':
+          description: game is not an integer
         '401':
           description: Unauthorized
         '500':
@@ -1015,7 +1713,6 @@ paths:
         and filters explicitly and echoes them as sent. The rows are the
         status-5 mods ("Featured") of the game.
       operationId: getFeaturedMods
-      security: []
       requestBody:
         required: true
         content:
@@ -1044,7 +1741,6 @@ paths:
       summary: Search mods (v4)
       description: Search for mods with various filters and sorting options
       operationId: findModsV4
-      security: []
       requestBody:
         required: true
         content:
@@ -1073,7 +1769,6 @@ paths:
       summary: Get mod details (v4)
       description: Returns detailed information about a specific mod
       operationId: getModDetailV4
-      security: []
       parameters:
         - name: modId
           in: path
@@ -1088,10 +1783,16 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/DetailResponse'
+        '400':
+          description: Invalid modId
         '401':
           description: Unauthorized
         '404':
-          description: Mod not found
+          description: Mod not found (RFC 9110 ProblemDetails)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
         '500':
           description: Internal server error
 
@@ -1116,6 +1817,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ModList'
+        '400':
+          description: Bad request
         '401':
           description: Unauthorized
         '500':
@@ -1143,6 +1846,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SubscribeResponse'
+        '400':
+          description: Invalid modId
         '401':
           description: Unauthorized
         '404':
@@ -1172,6 +1877,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/UnsubscribeResponse'
+        '400':
+          description: Invalid modId
         '401':
           description: Unauthorized
         '404':
@@ -1204,6 +1911,8 @@ paths:
           description: Bad request
         '401':
           description: Unauthorized
+        '404':
+          description: Mod not found
         '500':
           description: Internal server error
 
@@ -1232,12 +1941,73 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/DownloadResponse'
+        '400':
+          description: Invalid modId
         '401':
           description: Unauthorized
         '404':
           description: Mod not found
         '500':
           description: Internal server error
+
+  /api/v4/mods/Download/{modId}/file:
+    get:
+      tags:
+        - Mods
+      summary: Download the mod archive (v4)
+      description: |
+        Streams the stored archive with an attachment Content-Disposition. It is
+        the target of the downloadUrl that Subscribe and Download hand to the
+        client, requires authentication, and does not touch the download
+        counter (the JSON endpoint owns it).
+      operationId: downloadModFileV4
+      parameters:
+        - name: modId
+          in: path
+          required: true
+          schema:
+            type: integer
+          description: Mod ID
+      responses:
+        '200':
+          description: The raw archive
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '401':
+          description: Unauthorized
+        '404':
+          description: Mod not found or mod has no file
+        '500':
+          description: No upload directory configured, or internal server error
+
+  # Media
+  /api/v4/mods/Image/{name}:
+    get:
+      tags:
+        - Media
+      summary: Get a stored mod screenshot
+      description: |
+        Serves the screenshots Publish stored under UploadDir. Anonymous: a
+        thumbnail carries no user data and the game client may fetch it before
+        it authenticates. The path parameter is reduced to its base name, so a
+        traversal never escapes UploadDir.
+      operationId: getModImage
+      security: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Stored image file name
+      responses:
+        '200':
+          description: The image bytes
+        '404':
+          description: Image not found or no upload directory configured
 
   # Mods - Detail (v1, AOE2)
   /api/v1/Mods/Detail/:
@@ -1257,20 +2027,26 @@ paths:
                 - modid
               properties:
                 modid:
-                  type: integer
+                  description: Mod ID; clients send either an integer or its string form
+                  oneOf:
+                    - type: integer
+                    - type: string
                 game:
                   type: integer
+                  description: Optional; the capture sends only modid and the value is unused
       responses:
         '200':
           description: Successful response
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/DetailResponse'
+                $ref: '#/components/schemas/LegacyDetail'
+        '400':
+          description: Bad request
         '401':
           description: Unauthorized
         '404':
-          description: Mod not found
+          description: Mod not found (ErrorResponse)
         '500':
           description: Internal server error
 
@@ -1294,7 +2070,9 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ModList'
+                $ref: '#/components/schemas/LegacyModList'
+        '400':
+          description: Bad request
         '401':
           description: Unauthorized
         '500':
@@ -1313,14 +2091,16 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/InstalledModsRequest'
+              $ref: '#/components/schemas/FindModsRequestV1'
       responses:
         '200':
           description: Successful response
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ModList'
+                $ref: '#/components/schemas/LegacyModList'
+        '400':
+          description: Bad request
         '401':
           description: Unauthorized
         '500':
@@ -1346,7 +2126,9 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ModList'
+                $ref: '#/components/schemas/LegacyModList'
+        '400':
+          description: Bad request
         '401':
           description: Unauthorized
         '500':
@@ -1373,8 +2155,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/FlagResponse'
+        '400':
+          description: Bad request
         '401':
           description: Unauthorized
+        '404':
+          description: Mod not found
         '500':
           description: Internal server error
 
@@ -1399,8 +2185,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/InstallModResponse'
+        '400':
+          description: Bad request
         '401':
           description: Unauthorized
+        '404':
+          description: Mod not found
         '500':
           description: Internal server error
 
@@ -1425,8 +2215,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/UninstallModResponse'
+        '400':
+          description: Bad request
         '401':
           description: Unauthorized
+        '404':
+          description: Mod not found
         '500':
           description: Internal server error
 
@@ -1473,12 +2267,16 @@ paths:
                     example: ModId
                   resultValue:
                     type: string
-                    description: The id of the created mod
+                    description: The id of the created or updated mod
                     example: "593779"
                   resultJson:
                     nullable: true
+        '400':
+          description: Bad request
         '401':
-          description: Unauthorized
+          description: Unauthorized, or the caller does not own the mod being updated
+        '404':
+          description: Mod not found
         '500':
           description: Internal server error
 
@@ -1495,31 +2293,20 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/UninstallModRequest'
+              $ref: '#/components/schemas/InstallModRequest'
       responses:
         '200':
-          description: Successful response
+          description: The mod was deleted
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  errorCode:
-                    type: integer
-                    example: 0
-                  errorMessage:
-                    type: string
-                    example: "0"
-                  resultKey:
-                    type: string
-                    example: Deleted
-                  resultValue:
-                    type: string
-                    example: "true"
-                  resultJson:
-                    nullable: true
+                $ref: '#/components/schemas/DeletedModResponseV1'
+        '400':
+          description: Bad request
         '401':
-          description: Unauthorized
+          description: Unauthorized, or the caller is not the creator
+        '404':
+          description: Mod not found
         '500':
           description: Internal server error
 
@@ -1531,7 +2318,6 @@ paths:
       summary: Get mod reviews
       description: Returns reviews for a specific mod
       operationId: getModReviews
-      security: []
       requestBody:
         required: true
         content:
@@ -1614,6 +2400,8 @@ paths:
                     type: integer
                     nullable: true
                     description: Null when the mod has no reviews.
+        '400':
+          description: Bad request
         '401':
           description: Unauthorized
         '500':
@@ -1627,7 +2415,6 @@ paths:
       summary: Get related mods
       description: Returns mods related to the specified mod
       operationId: getRelatedMods
-      security: []
       parameters:
         - name: modId
           in: path
@@ -1642,10 +2429,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ModList'
+        '204':
+          description: |
+            No related mods, or the requested mod does not exist. The endpoint
+            answers an empty body rather than a 404.
+        '400':
+          description: Invalid modId
         '401':
           description: Unauthorized
-        '404':
-          description: Mod not found
         '500':
           description: Internal server error
   # Delete a mod
@@ -1763,13 +2554,13 @@ paths:
                 modType:
                   type: integer
                   description: |-
-                    Mod type id. Validated against the tags (mod_types) of the
-                    game, except the auto tag 26 "Other" of a create without
-                    tags, which attaches even when the catalog of the game has
-                    no 26 (the AOE4 capture does: modTagIds [26] with empty
-                    modTagNames). The AOE4 client uploads type 6 (Extension)
-                    for game 4, whose catalog stops at 5, and its Detail
-                    answers modType Extension anyway.
+                    Mod type id, stored as sent: the catalog of the game is not
+                    consulted, so an id the Tags catalog does not sell still
+                    attaches (the AOE4 client uploads type 6 "Extension" for
+                    game 4, whose catalog stops at 5, and its Detail answers
+                    modType Extension). A create without tags also gets the
+                    auto tag 26 "Other" in modTagIds, whose name is empty when
+                    the catalog of the game has no 26.
                 modName:
                   type: string
                   description: |-
@@ -1841,7 +2632,7 @@ paths:
                     type: string
                     nullable: true
         '400':
-          description: Bad request, including an unknown tag for the game
+          description: Bad request (missing gameTitleId or modName, invalid visibility, unreadable multipart body or ImageMetaData)
         '401':
           description: Unauthorized, or the caller is not the creator
         '404':
@@ -1876,10 +2667,12 @@ paths:
       parameters:
         - name: comp
           in: query
-          required: true
+          required: false
           schema:
             type: string
             enum: [block, blocklist]
+            default: block
+          description: An absent comp behaves like block
         - name: blockid
           in: query
           schema:
@@ -1898,6 +2691,11 @@ paths:
             schema:
               type: string
               format: binary
+              description: Raw block bytes when comp is block; the XML or newline separated block list when comp is blocklist.
+          application/xml:
+            schema:
+              type: string
+              description: '<BlockList><Latest>00000000</Latest></BlockList>'
       responses:
         '200':
           description: The block or the commit was stored
@@ -1912,6 +2710,12 @@ paths:
           description: Unauthorized, or the caller is not the creator
         '404':
           description: Mod not found (ProblemDetails)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '500':
+          description: Internal server error
 
   # My mods (v4)
   /api/v4/Mods/My/:
@@ -1940,7 +2744,11 @@ paths:
                   default: 1
                 count:
                   type: integer
-                  default: 1000
+                  default: 10
+                  maximum: 500
+                  description: |
+                    Any explicit value resolves to the 500 maximum in the echo
+                    and in the page; a body without count uses 10.
                 order:
                   type: string
                   enum: [ASC, DESC]
@@ -1965,6 +2773,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ModList'
+        '400':
+          description: Bad request
         '401':
           description: Unauthorized
         '500':
@@ -2129,4 +2939,175 @@ paths:
           description: Unauthorized
         '500':
           description: Internal server error
+
+  # MatchContent
+  /api/MatchContent/:
+    post:
+      tags:
+        - MatchContent
+      summary: Upload a multiplayer savegame or replay
+      description: |
+        Streams the multipart payload to disk and stores it under the match id.
+        The parts are:
+
+        * `fileContent` - the savegame or replay, with its original file name.
+          Only known extensions are accepted (*.aoe2record, *.mgz, *.aoe3Yrec,
+          ...). Its size is bounded by MatchContent.MaxFileSize.
+        * `matchId` - the positive 32-bit id the file is stored under.
+
+        The answer is JSON with `isError`, which the AOE2 DE client requires.
+        Anonymous. Answers 404 when the match content store is disabled.
+      operationId: uploadMatchContent
+      security: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - fileContent
+                - matchId
+              properties:
+                fileContent:
+                  type: string
+                  format: binary
+                matchId:
+                  type: integer
+      responses:
+        '200':
+          description: The file was stored
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  isError:
+                    type: boolean
+                    example: false
+        '400':
+          description: Invalid multipart body, missing matchId, invalid matchId, duplicate fileContent, empty file or unsupported extension
+        '404':
+          description: Match content store disabled
+        '413':
+          description: File too large
+        '500':
+          description: Cannot store the file
+
+  /api/MatchContent/{matchId}:
+    get:
+      tags:
+        - MatchContent
+      summary: Get the metadata of a stored match file
+      description: |
+        Returns the JSON metadata the AOE2 DE client reads before it downloads
+        the payload: fileName, fileSize, filePath (the absolute URL of the
+        payload route) and fileCRC. Anonymous; answers 404 when the store is
+        disabled or the id is unknown.
+      operationId: getMatchContent
+      security: []
+      parameters:
+        - name: matchId
+          in: path
+          required: true
+          schema:
+            type: integer
+          description: Match id the file was uploaded under
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  isError:
+                    type: boolean
+                    example: false
+                  fileList:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        fileName:
+                          type: string
+                        fileSize:
+                          type: integer
+                        filePath:
+                          type: string
+                          format: uri
+                        fileCRC:
+                          type: string
+        '404':
+          description: Match content store disabled or file not found
+
+  /api/MatchContent/{matchId}/file/{hash}:
+    get:
+      tags:
+        - MatchContent
+      summary: Download a stored match file
+      description: |
+        Streams the payload with its stored content type, length, MD5 ETag and
+        Content-MD5 header. The `hash` must equal the stored MD5 digest, so
+        stale metadata never downloads a replacement uploaded under the same
+        id. Anonymous.
+      operationId: downloadMatchContent
+      security: []
+      parameters:
+        - name: matchId
+          in: path
+          required: true
+          schema:
+            type: integer
+          description: Match id the file was uploaded under
+        - name: hash
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Stored MD5 digest of the file
+      responses:
+        '200':
+          description: The raw file
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '404':
+          description: Match content store disabled, file not found or hash mismatch
+
+  # Ops
+  /healthz:
+    get:
+      tags:
+        - Ops
+      summary: Health probe
+      description: |
+        Pings the database. Answers {"status":"ok"} on success and
+        {"status":"unavailable"} with 503 when the database is unreachable.
+        Anonymous.
+      operationId: getHealthz
+      security: []
+      responses:
+        '200':
+          description: Database reachable
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+        '503':
+          description: Database unreachable
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: unavailable
 
