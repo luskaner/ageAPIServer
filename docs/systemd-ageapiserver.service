@@ -1,0 +1,29 @@
+[Unit]
+Description=ageAPIServer (Age of Empires Mods API)
+Documentation=https://github.com/luskaner/ageAPIServer
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Every AGEAPISERVER_* override can live in this one file.
+EnvironmentFile=-/etc/ageAPIServer/ageAPIServer.env
+# Not cosmetic: config.toml, the log, the database and uploads are resolved
+# against the working directory. Only the certificate folder (resources/
+# certificates) is resolved against the executable.
+WorkingDirectory=/var/lib/ageAPIServer
+ExecStart=/opt/ageAPIServer/ageAPIServer
+Restart=on-failure
+RestartSec=5s
+User=ageapiserver
+Group=ageapiserver
+
+# The SQLite file and uploads live in the working directory.
+ProtectSystem=strict
+ReadWritePaths=/var/lib/ageAPIServer
+ProtectHome=true
+PrivateTmp=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

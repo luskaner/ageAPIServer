@@ -1,0 +1,14 @@
+.git
+.github
+.idea
+.tools
+dist
+docs
+tools
+uploads
+*.db
+*.db-wal
+*.db-shm
+*.log
+cover*.out
+.smoke-test
