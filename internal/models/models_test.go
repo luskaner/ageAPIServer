@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package models
 
 import (
@@ -42,7 +44,7 @@ func seedMods(t *testing.T, stores *Stores) {
 
 func TestMigrateIsIdempotent(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "test.db")
-	for attempt := 0; attempt < 2; attempt++ {
+	for attempt := range 2 {
 		stores, err := Open(Options{Path: path, MaxOpenConns: 1})
 		if err != nil {
 			t.Fatalf("open attempt %d: %v", attempt, err)
@@ -310,13 +312,17 @@ func TestReviewsArePaged(t *testing.T) {
 	seedMods(t, stores)
 	ctx := context.Background()
 
-	for i := 0; i < 3; i++ {
+	for _, suffix := range []struct{ letter, digit string }{
+		{"a", "1"},
+		{"b", "2"},
+		{"c", "3"},
+	} {
 		review := Review{
-			ReviewID:   ptr("review-" + string(rune('a'+i))),
-			ReviewerID: ptr("7656119800000000" + string(rune('1'+i))),
+			ReviewID:   new("review-" + suffix.letter),
+			ReviewerID: new("7656119800000000" + suffix.digit),
 			Rating:     4,
 			ReviewText: "fine",
-			Submitted:  "2024-01-0" + string(rune('1'+i)) + "T10:00:00Z",
+			Submitted:  "2024-01-0" + suffix.digit + "T10:00:00Z",
 		}
 		if err := stores.Ratings.AddReview(ctx, review, 100); err != nil {
 			t.Fatal(err)
@@ -430,10 +436,6 @@ func TestSessionRoundTrip(t *testing.T) {
 	if _, err := stores.Users.UserBySessionToken(ctx, token); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("deleted session still resolves: %v", err)
 	}
-}
-
-func ptr[T any](value T) *T {
-	return &value
 }
 
 // TestSeedRejectsAStaleCatalog covers the guard for a database created before

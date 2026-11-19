@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Package logger is the process logger: a prefixed console writer plus an
 // optional file, both on top of log/slog. It also owns the single redaction
 // point for credentials, so no other package can leak a Steam token or a
@@ -5,8 +7,10 @@
 package logger
 
 import (
+	"context"
 	"fmt"
 	"io"
+	"log"
 	"log/slog"
 	"os"
 	"strings"
@@ -50,13 +54,25 @@ func ParseLevel(name string) slog.Level {
 }
 
 // OpenMainFileLog opens the log file. An empty path or a disabled logger is a
-// no-op, so the caller does not have to branch.
-func OpenMainFileLog(path string, enabled bool, levelName string) error {
+// no-op, so the caller does not have to branch. maxSizeBytes rotates the
+// previous file to <path>.old when it is already bigger: one generation, checked
+// only at startup, which is the whole rotation this process performs.
+func OpenMainFileLog(path string, enabled bool, levelName string, maxSizeBytes int64) error {
 	mu.Lock()
 	defer mu.Unlock()
 	level = ParseLevel(levelName)
 	if !enabled || path == "" {
 		return nil
+	}
+	if maxSizeBytes > 0 {
+		if info, err := os.Stat(path); err == nil && info.Size() > maxSizeBytes {
+			// os.Rename does not replace an existing file on Windows, so the
+			// previous generation is removed first.
+			_ = os.Remove(path + ".old")
+			if err := os.Rename(path, path+".old"); err != nil {
+				return fmt.Errorf("rotate log file: %w", err)
+			}
+		}
 	}
 	handle, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
@@ -78,46 +94,64 @@ func Close() {
 	}
 }
 
-func write(prefix string, format string, a ...any) {
+// write renders one line to the console and, when the file logger is open, to
+// the file at the line's own level. The console keeps printing every line: the
+// configured level is the minimum the file records.
+func write(level slog.Level, prefix string, format string, a ...any) {
 	message := fmt.Sprintf(format, a...)
 	mu.Lock()
 	defer mu.Unlock()
 	_, _ = fmt.Fprintf(console, "%s %s\n", prefix, message)
 	if fileLogger != nil {
-		fileLogger.Info(message, "prefix", prefix)
+		fileLogger.Log(context.Background(), level, message, "prefix", prefix)
 	}
 }
 
-// Ok, Fail, Warn, Info, Step, Detail and Fault are the styled console verbs the
-// rest of the module speaks to.
-func Ok(format string, a ...any)     { write("[ OK ]", format, a...) }
-func Fail(format string, a ...any)   { write("[FAIL]", format, a...) }
-func Warn(format string, a ...any)   { write("[WARN]", format, a...) }
-func Info(format string, a ...any)   { write("[INFO]", format, a...) }
-func Step(format string, a ...any)   { write("[STEP]", format, a...) }
-func Detail(format string, a ...any) { write("[ .. ]", format, a...) }
-func Fault(format string, a ...any)  { write("[ERR ]", format, a...) }
+// Ok writes the styled console line of a success; Fail, Warn, Info, Detail and
+// Fault are the same shape for the other verbs. Ok, Info, Detail, Section, KV
+// and Banner are informational; Warn is a warning and Fail and Fault are
+// errors, which is the level the file logger records them at.
+func Ok(format string, a ...any)     { write(slog.LevelInfo, "[ OK ]", format, a...) }
+func Fail(format string, a ...any)   { write(slog.LevelError, "[FAIL]", format, a...) }
+func Warn(format string, a ...any)   { write(slog.LevelWarn, "[WARN]", format, a...) }
+func Info(format string, a ...any)   { write(slog.LevelInfo, "[INFO]", format, a...) }
+func Detail(format string, a ...any) { write(slog.LevelInfo, "[ .. ]", format, a...) }
+func Fault(format string, a ...any)  { write(slog.LevelError, "[ERR ]", format, a...) }
 
-// Debugf logs at debug level, to the file only.
-func Debugf(format string, a ...any) {
-	mu.Lock()
-	defer mu.Unlock()
-	if fileLogger != nil && level <= slog.LevelDebug {
-		fileLogger.Debug(fmt.Sprintf(format, a...))
-	}
-}
+// Debug is the level for lines that only matter while diagnosing a problem; it
+// is written to the file when the configured level is debug and printed to the
+// console like every other line.
+func Debug(format string, a ...any) { write(slog.LevelDebug, "[ .. ]", format, a...) }
 
 // Banner prints the one-line program header.
 func Banner(version string) {
-	write("[====]", "ageAPIServer %s (started %s)", version, StartTime.Format(time.RFC3339))
+	write(slog.LevelInfo, "[====]", "ageAPIServer %s (started %s)", version, StartTime.Format(time.RFC3339))
 }
 
 // Section prints a phase header.
 func Section(name string) {
-	write("[----]", "%s", name)
+	write(slog.LevelInfo, "[----]", "%s", name)
 }
 
 // KV prints an indented key/value pair.
 func KV(indent int, key string, value string) {
-	write("[ .. ]", "%s%s: %s", strings.Repeat("  ", indent), key, value)
+	write(slog.LevelInfo, "[ .. ]", "%s%s: %s", strings.Repeat("  ", indent), key, value)
+}
+
+// StdLogger adapts the process logger to *log.Logger for http.Server.ErrorLog:
+// net/http handshake errors belong in the log file, not in raw stderr.
+func StdLogger() *log.Logger {
+	return log.New(&stdWriter{}, "", 0)
+}
+
+// stdWriter is the bridge from the standard log package into the leveled
+// writer above. The lines net/http emits carry no headers, so no credential can
+// reach this path; it goes through the same pipeline for consistency.
+type stdWriter struct{}
+
+func (stdWriter) Write(p []byte) (int, error) {
+	if line := strings.TrimSpace(string(p)); line != "" {
+		write(slog.LevelWarn, "[HTTP]", "%s", line)
+	}
+	return len(p), nil
 }

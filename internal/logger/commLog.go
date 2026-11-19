@@ -1,7 +1,9 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package logger
 
 import (
-	"fmt"
+	"log/slog"
 	"time"
 )
 
@@ -9,11 +11,5 @@ import (
 // bodies: the caller passes the already redacted summary, so a credential
 // cannot reach this function by accident.
 func CommLog(requestID string, method string, path string, status int, duration time.Duration) {
-	write("[HTTP]", "%s %s %s -> %d (%s)", requestID, method, path, status, duration.Round(time.Microsecond))
-}
-
-// CommLogf records an exchange with an extra, already redacted detail.
-func CommLogf(requestID string, method string, path string, status int, duration time.Duration, format string, a ...any) {
-	write("[HTTP]", "%s %s %s -> %d (%s) %s", requestID, method, path, status,
-		duration.Round(time.Microsecond), fmt.Sprintf(format, a...))
+	write(slog.LevelInfo, "[HTTP]", "%s %s %s -> %d (%s)", requestID, method, path, status, duration.Round(time.Microsecond))
 }

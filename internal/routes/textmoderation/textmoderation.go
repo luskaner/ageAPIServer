@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Package textmoderation answers the moderation probe of the game clients. The
 // package path mirrors the endpoint: /textmoderation.
 package textmoderation

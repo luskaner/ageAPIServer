@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package router
 
 import (
@@ -42,7 +44,7 @@ func cleanPath(path string) (string, bool) {
 		return "/", true
 	}
 	segments := make([]string, 0, 8)
-	for _, segment := range strings.Split(path, "/") {
+	for segment := range strings.SplitSeq(path, "/") {
 		switch segment {
 		case "", ".":
 			continue

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Package router is the HTTP plumbing: a thin group wrapper over
 // http.ServeMux plus the middleware chain. The route packages register handlers
 // here and never touch the mux directly.
@@ -6,6 +8,7 @@ package router
 import (
 	"context"
 	"net/http"
+	"slices"
 
 	"github.com/luskaner/ageAPIServer/internal/models"
 )
@@ -59,8 +62,8 @@ type Middleware func(http.Handler) http.Handler
 
 // Chain applies the middlewares so the first one is the outermost.
 func Chain(handler http.Handler, middlewares ...Middleware) http.Handler {
-	for i := len(middlewares) - 1; i >= 0; i-- {
-		handler = middlewares[i](handler)
+	for _, middleware := range slices.Backward(middlewares) {
+		handler = middleware(handler)
 	}
 	return handler
 }

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Package ageAPIServer implements the Age of Empires Mods API (api_spec.yml)
 // on top of SQLite. It is usable as a standalone binary and as a mountable
 // http.Handler inside any existing net/http application.
@@ -8,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/luskaner/ageAPIServer/internal/logger"
@@ -43,9 +46,6 @@ type Config struct {
 	CORS CORSConfig
 	// Pagination is the interpretation of start/count.
 	Pagination PaginationConfig
-	// RequireAuthForReadOnly makes the endpoints the spec declares anonymous
-	// reject requests without credentials. The default keeps the spec.
-	RequireAuthForReadOnly bool
 	// UploadDir is where Publish stores the mod file and its images. Empty
 	// rejects any publish that carries a file.
 	UploadDir string
@@ -56,10 +56,18 @@ type Config struct {
 	// PublicBaseURL is the absolute base of the download and media URLs. Empty
 	// derives it from each request.
 	PublicBaseURL string
-	// MaxBodySize caps a request body. Zero means 1 MiB. Publish needs more:
-	// a mod archive is measured in megabytes. /api/MatchContent/ is exempt, so
-	// its store applies MaxFileSize instead.
+	// PublicScheme is the scheme derived URLs fall back to when neither the
+	// request nor a proxy header names one. Empty means "http"; "https" is for
+	// a deployment behind an external TLS terminator that forwards only the
+	// host.
+	PublicScheme string
+	// MaxBodySize caps a request body. Zero means 1 MiB. Publish and the legacy
+	// Create are exempt: their archive is streamed to disk under
+	// MaxModFileBytes, and /api/MatchContent/ applies MatchContent.MaxFileSize.
 	MaxBodySize int64
+	// MaxModFileBytes caps each archive or screenshot Publish streams to
+	// UploadDir. Zero means no limit.
+	MaxModFileBytes int64
 	// MatchContent is the disk store behind the /api/MatchContent endpoints.
 	// The zero value leaves them answering 404.
 	MatchContent MatchContentConfig
@@ -95,6 +103,9 @@ type MatchContentConfig struct {
 	MaxTotalSize int64
 	// Expiry deletes a file after this long. Zero keeps it until it is evicted.
 	Expiry time.Duration
+	// RateLimitPerMinute caps the requests one client IP may make to the
+	// MatchContent endpoints per minute. Zero disables the limit.
+	RateLimitPerMinute int
 }
 
 // Route is one entry of the inventory.
@@ -178,14 +189,17 @@ func New(cfg Config) (*Server, error) {
 	})
 
 	deps := shared.Deps{
-		Stores:                 stores,
-		Pagination:             pagination,
-		PublicBaseURL:          cfg.PublicBaseURL,
-		SessionTTL:             sessionTTL,
-		CookieName:             cookieName,
-		RequireAuthForReadOnly: cfg.RequireAuthForReadOnly,
-		UploadDir:              cfg.UploadDir,
-		MatchContent:           matchContent,
+		Stores:          stores,
+		Pagination:      pagination,
+		PublicBaseURL:   cfg.PublicBaseURL,
+		PublicScheme:    cfg.PublicScheme,
+		SessionTTL:      sessionTTL,
+		CookieName:      cookieName,
+		UploadDir:       cfg.UploadDir,
+		MaxModFileBytes: cfg.MaxModFileBytes,
+		MatchContent:    matchContent,
+		// The rate limit is a route concern: the store only owns the files.
+		MatchContentRateLimitPerMinute: cfg.MatchContent.RateLimitPerMinute,
 	}
 
 	group := router.New()
@@ -194,6 +208,7 @@ func New(cfg Config) (*Server, error) {
 	poll.Register(group, deps)
 	textmoderation.Register(group, deps)
 	matchcontent.Register(group, deps)
+	group.HandleFunc("GET", "/openapi.yml", openAPISpec)
 	group.Handle("GET", "/healthz", shared.Healthz(stores.System))
 	group.HandlePath("/", http.HandlerFunc(notFound))
 
@@ -205,6 +220,7 @@ func New(cfg Config) (*Server, error) {
 			AllowedOrigins:   origins,
 			AllowCredentials: cfg.CORS.AllowCredentials,
 			MaxAge:           maxAge,
+			AllowedMethods:   inventoryMethods(routeInventory),
 		}),
 		router.MaxBodySize(maxBodySize),
 	)
@@ -240,24 +256,42 @@ func notFound(w http.ResponseWriter, _ *http.Request) {
 	shared.WriteError(w, http.StatusNotFound, shared.CodeNotFound, "not found")
 }
 
+// inventoryMethods renders the methods the inventory actually serves for the
+// Access-Control-Allow-Methods header. The spec serves a PUT
+// (CheckAndPublishFile), which a hardcoded GET/POST/OPTIONS list would hide
+// from the browser preflight.
+func inventoryMethods(routes []Route) []string {
+	served := make(map[string]bool, len(routes))
+	for _, route := range routes {
+		served[strings.ToLower(route.Method)] = true
+	}
+	methods := make([]string, 0, len(served)+1)
+	for _, method := range []string{"get", "post", "put", "delete"} {
+		if served[method] {
+			methods = append(methods, strings.ToUpper(method))
+		}
+	}
+	return append(methods, http.MethodOptions)
+}
+
 // routeInventory is the documented list of endpoints. It is the single source
 // of truth for Routes() and for the all-routes test.
 var routeInventory = []Route{
-	{Method: "GET", Path: "/api/v4/mods/games", SpecPath: "/api/v4/mods/Games"},
-	{Method: "GET", Path: "/api/v4/mods/tags", SpecPath: "/api/v4/mods/Tags"},
-	{Method: "POST", Path: "/api/v4/mods/featured", SpecPath: "/api/v4/mods/Featured"},
-	{Method: "POST", Path: "/api/v4/mods/find", SpecPath: "/api/v4/Mods/Find/"},
-	{Method: "GET", Path: "/api/v4/mods/detail/{modid}", SpecPath: "/api/v4/Mods/Detail/{modId}"},
-	{Method: "GET", Path: "/api/v4/mods/related/{modid}", SpecPath: "/api/v4/mods/Related/{modId}"},
-	{Method: "POST", Path: "/api/v4/mods/reviews", SpecPath: "/api/v4/mods/Reviews"},
+	{Method: "GET", Path: "/api/v4/mods/games", SpecPath: "/api/v4/mods/Games", AuthRequired: true},
+	{Method: "GET", Path: "/api/v4/mods/tags", SpecPath: "/api/v4/mods/Tags", AuthRequired: true},
+	{Method: "POST", Path: "/api/v4/mods/featured", SpecPath: "/api/v4/mods/Featured", AuthRequired: true},
+	{Method: "POST", Path: "/api/v4/mods/find", SpecPath: "/api/v4/Mods/Find/", AuthRequired: true},
+	{Method: "GET", Path: "/api/v4/mods/detail/{modid}", SpecPath: "/api/v4/Mods/Detail/{modId}", AuthRequired: true},
+	{Method: "GET", Path: "/api/v4/mods/related/{modid}", SpecPath: "/api/v4/mods/Related/{modId}", AuthRequired: true},
+	{Method: "POST", Path: "/api/v4/mods/reviews", SpecPath: "/api/v4/mods/Reviews", AuthRequired: true},
 	{Method: "POST", Path: "/api/v4/mods/installed", SpecPath: "/api/v4/Mods/Installed/", AuthRequired: true},
 	{Method: "POST", Path: "/api/v4/mods/my", SpecPath: "/api/v4/Mods/My/", AuthRequired: true},
 	{Method: "GET", Path: "/api/v4/mods/subscribe/{modid}", SpecPath: "/api/v4/Mods/Subscribe/{modId}", AuthRequired: true},
 	{Method: "GET", Path: "/api/v4/mods/unsubscribe/{modid}", SpecPath: "/api/v4/Mods/Unsubscribe/{modId}", AuthRequired: true},
 	{Method: "POST", Path: "/api/v4/mods/rate", SpecPath: "/api/v4/Mods/Rate/", AuthRequired: true},
 	{Method: "GET", Path: "/api/v4/mods/download/{modid}", SpecPath: "/api/v4/Mods/Download/{modId}/", AuthRequired: true},
-	{Method: "GET", Path: "/api/v4/mods/download/{modid}/file", SpecPath: "/api/v4/Mods/Download/{modId}/", AuthRequired: true},
-	{Method: "GET", Path: "/api/v4/mods/image/{name}", SpecPath: ""},
+	{Method: "GET", Path: "/api/v4/mods/download/{modid}/file", SpecPath: "/api/v4/mods/Download/{modId}/file", AuthRequired: true},
+	{Method: "GET", Path: "/api/v4/mods/image/{name}", SpecPath: "/api/v4/mods/Image/{name}"},
 	{Method: "POST", Path: "/api/v4/mods/publish", SpecPath: "/api/v4/mods/Publish", AuthRequired: true},
 	{Method: "PUT", Path: "/api/v4/mods/checkandpublishfile", SpecPath: "/api/v4/mods/CheckAndPublishFile", AuthRequired: true},
 	{Method: "POST", Path: "/api/v4/mods/delete", SpecPath: "/api/v4/mods/Delete", AuthRequired: true},
@@ -271,13 +305,13 @@ var routeInventory = []Route{
 	{Method: "POST", Path: "/api/v1/mods/flag", SpecPath: "/api/v1/Mods/Flag/", AuthRequired: true},
 	{Method: "POST", Path: "/api/v1/mods/install", SpecPath: "/api/v1/Mods/Install/", AuthRequired: true},
 	{Method: "POST", Path: "/api/v1/mods/uninstall", SpecPath: "/api/v1/Mods/Uninstall/", AuthRequired: true},
-	{Method: "POST", Path: "/api/v1/mods/create", SpecPath: "/api/v1/Mods/Create/", AuthRequired: true},
-	{Method: "POST", Path: "/api/v1/mods/delete", SpecPath: "/api/v1/Mods/Delete/", AuthRequired: true},
 	{Method: "GET", Path: "/poll/list", SpecPath: "/Poll/list", AuthRequired: true},
 	{Method: "GET", Path: "/poll/{pollid}", SpecPath: "/Poll/{pollId}", AuthRequired: true},
 	{Method: "POST", Path: "/textmoderation", SpecPath: "/textmoderation", AuthRequired: true},
-	{Method: "POST", Path: "/api/matchcontent", SpecPath: ""},
-	{Method: "GET", Path: "/api/matchcontent/{matchid}", SpecPath: ""},
-	{Method: "GET", Path: "/api/matchcontent/{matchid}/file/{hash}", SpecPath: ""},
-	{Method: "GET", Path: "/healthz", SpecPath: ""},
+	{Method: "POST", Path: "/api/matchcontent", SpecPath: "/api/MatchContent/"},
+	{Method: "GET", Path: "/api/matchcontent/{matchid}", SpecPath: "/api/MatchContent/{matchId}"},
+	{Method: "GET", Path: "/api/matchcontent/{matchid}/file/{hash}", SpecPath: "/api/MatchContent/{matchId}/file/{hash}"},
+	{Method: "GET", Path: "/healthz", SpecPath: "/healthz"},
+	// Local Ops addition: the embedded api_spec.yml.
+	{Method: "GET", Path: "/openapi.yml", SpecPath: "/openapi.yml"},
 }

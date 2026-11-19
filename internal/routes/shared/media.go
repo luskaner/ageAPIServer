@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package shared
 
 import (
@@ -17,10 +19,10 @@ const MediaPath = "/api/v4/mods/image/"
 // them against the API host would render nothing.
 func MediaURL(r *http.Request, deps Deps, name string) string {
 	name = strings.TrimSpace(name)
-	if name == "" || strings.HasPrefix(name, "http://") || strings.HasPrefix(name, "https://") {
+	if name == "" || models.IsAbsoluteURL(name) {
 		return name
 	}
-	return BaseURL(r, deps.PublicBaseURL) + MediaPath + url.PathEscape(name)
+	return BaseURL(r, deps.PublicBaseURL, deps.PublicScheme) + MediaPath + url.PathEscape(name)
 }
 
 // AbsolutizeMods rewrites the media names of one page in place.
@@ -48,15 +50,10 @@ func AbsolutizeDetail(r *http.Request, deps Deps, detail *models.Detail) {
 		}
 	}
 	if detail.FileURL != nil && *detail.FileURL != "" {
-		detail.FileURL = ptr(DownloadURL(r, deps.PublicBaseURL, detail.ModID, *detail.FileURL))
+		detail.FileURL = new(DownloadURL(r, deps, detail.ModID, *detail.FileURL))
 	}
 	for i := range detail.ImageURLs {
 		detail.ImageURLs[i].ImageName = MediaURL(r, deps, detail.ImageURLs[i].ImageName)
 		detail.ImageURLs[i].ImageThumbnail = MediaURL(r, deps, detail.ImageURLs[i].ImageThumbnail)
 	}
-}
-
-// ptr is a string pointer for the absolutized fields.
-func ptr(value string) *string {
-	return &value
 }

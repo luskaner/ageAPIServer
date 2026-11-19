@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package router
 
 import (
@@ -36,6 +38,39 @@ func TestCORSPreflightIsAnsweredBeforeTheMux(t *testing.T) {
 	}
 	if got := recorder.Header().Get("Access-Control-Max-Age"); got != "600" {
 		t.Fatalf("max-age = %q", got)
+	}
+}
+
+func TestCORSAdvertisesTheConfiguredMethods(t *testing.T) {
+	handler := CORS(CORSConfig{
+		AllowedOrigins: []string{"https://www.ageofempires.com"},
+		MaxAge:         600 * time.Second,
+		AllowedMethods: []string{"GET", "POST", "PUT", "OPTIONS"},
+	})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	request := httptest.NewRequest(http.MethodOptions, "/api/v4/mods/checkandpublishfile", nil)
+	request.Header.Set("Origin", "https://www.ageofempires.com")
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, request)
+
+	if got := recorder.Header().Get("Access-Control-Allow-Methods"); got != "GET, POST, PUT, OPTIONS" {
+		t.Fatalf("allow-methods = %q", got)
+	}
+}
+
+// TestCORSKeepsTheHistoricalMethodsWithoutConfig pins the default of a host
+// application that builds its own chain.
+func TestCORSKeepsTheHistoricalMethodsWithoutConfig(t *testing.T) {
+	request := httptest.NewRequest(http.MethodOptions, "/api/v4/mods/find", nil)
+	request.Header.Set("Origin", "https://www.ageofempires.com")
+	recorder := httptest.NewRecorder()
+
+	corsHandler().ServeHTTP(recorder, request)
+
+	if got := recorder.Header().Get("Access-Control-Allow-Methods"); got != "GET, POST, OPTIONS" {
+		t.Fatalf("allow-methods = %q", got)
 	}
 }
 

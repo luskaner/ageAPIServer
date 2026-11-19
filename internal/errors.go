@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package internal
 
 // Error codes returned by the process entry point. They start at 1 because
@@ -7,7 +9,6 @@ const (
 	ErrStartServer
 	ErrConfig
 	ErrDatabase
-	ErrPidLock
 	ErrInvalidAuthentication
-	ErrLast
+	ErrCertificate
 )

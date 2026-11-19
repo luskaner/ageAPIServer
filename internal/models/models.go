@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Package models owns the SQLite schema and every query. The route packages
 // only translate HTTP to these calls, so the SQL lives in one place.
 package models
@@ -94,11 +96,23 @@ func (s *Stores) Close() error {
 	return s.DB.Close()
 }
 
+// Credential schemes that Authenticator.Resolve recognises. SchemeCookie is the
+// website session; the empty value is an anonymous request.
+const (
+	SchemeSteam  = "Steam1.0"
+	SchemeXBL    = "XBL3.0"
+	SchemeCookie = "Cookie"
+)
+
 // Viewer is the identity attached to a request. UserID is 0 when anonymous.
 type Viewer struct {
 	UserID   int64
 	SteamID  string
 	LoggedOn bool
+	// Scheme is the credential that authenticated the request, which decides
+	// which upload contract applies: the website form is stricter than the
+	// game clients'.
+	Scheme string
 }
 
 // Game is one entry of the games catalog.

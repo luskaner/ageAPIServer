@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package shared
 
 // Pagination resolves the start/count pair of a request into a SQL OFFSET and
@@ -14,17 +16,13 @@ type Pagination struct {
 // caller must not append one.
 func (p Pagination) Resolve(start OptInt, count OptInt) (offset int, limit int) {
 	pageSize := count.OrDefault(int64(p.DefaultCount))
-	if pageSize < 0 {
-		pageSize = 0
-	}
+	pageSize = max(pageSize, 0)
 	if p.MaxCount > 0 && pageSize > int64(p.MaxCount) {
 		pageSize = int64(p.MaxCount)
 	}
 
 	startValue := start.OrDefault(1)
-	if startValue < 0 {
-		startValue = 0
-	}
+	startValue = max(startValue, 0)
 
 	if pageSize == 0 {
 		// count 0 is the "give me everything" sentinel; MaxCount bounds it.

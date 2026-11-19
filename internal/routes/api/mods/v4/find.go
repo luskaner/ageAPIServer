@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package v4
 
 import (
@@ -8,8 +10,8 @@ import (
 	"github.com/luskaner/ageAPIServer/internal/routes/shared"
 )
 
-// Find serves POST /api/v4/Mods/Find/. It is anonymous, but a request that
-// carries credentials still gets the per-user fields filled in.
+// Find serves POST /api/v4/Mods/Find/. The viewer's per-user fields are filled
+// in from the authenticated request.
 func Find(deps shared.Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var request shared.FindRequest

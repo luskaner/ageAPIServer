@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package ageAPIServer
 
 import (
@@ -13,6 +15,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -110,6 +113,78 @@ func downloadMatchFile(t *testing.T, handler http.Handler, path string) *httptes
 		t.Fatalf("metadata differs from payload: %+v", f)
 	}
 	return result
+}
+
+func newRateLimitedMatchServer(t *testing.T, perMinute int) *Server {
+	t.Helper()
+	server, err := New(Config{
+		DBPath: filepath.Join(t.TempDir(), "match.db"),
+		MatchContent: MatchContentConfig{
+			Enabled:            true,
+			Folder:             t.TempDir(),
+			Expiry:             time.Hour,
+			RateLimitPerMinute: perMinute,
+		},
+	})
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	t.Cleanup(func() { _ = server.Shutdown(context.Background()) })
+	return server
+}
+
+// TestMatchContentRateLimit pins the per-IP bucket: the N+1th request answers
+// 429 with Retry-After, and another client IP keeps its own allowance.
+func TestMatchContentRateLimit(t *testing.T) {
+	server := newRateLimitedMatchServer(t, 2)
+	handler := server.Handler()
+
+	for index := 0; index < 2; index++ {
+		recorder := doMatchRequest(handler, http.MethodGet, "/api/MatchContent/1", nil, nil)
+		if recorder.Code == http.StatusTooManyRequests {
+			t.Fatalf("request %d was limited", index+1)
+		}
+	}
+	recorder := doMatchRequest(handler, http.MethodGet, "/api/MatchContent/1", nil, nil)
+	if recorder.Code != http.StatusTooManyRequests {
+		t.Fatalf("code = %d, want 429", recorder.Code)
+	}
+	if got := recorder.Header().Get("Retry-After"); got == "" {
+		t.Fatal("429 without Retry-After")
+	}
+	if body := recorder.Body.String(); !strings.Contains(body, `"errorCode":429`) {
+		t.Fatalf("body = %s", body)
+	}
+
+	// The upload shares the same bucket, so it is limited from the same IP.
+	upload, contentType := buildMatchUpload(t, "TEST2.aoe2mpgame", []byte("data"), "7", true, true)
+	recorder = doMatchRequest(handler, http.MethodPost, "/api/MatchContent/", upload,
+		map[string]string{"Content-Type": contentType})
+	if recorder.Code != http.StatusTooManyRequests {
+		t.Fatalf("upload code = %d, want 429", recorder.Code)
+	}
+
+	// Another client has its own bucket.
+	request := httptest.NewRequest(http.MethodGet, "/api/MatchContent/1", nil)
+	request.RemoteAddr = "198.51.100.7:1234"
+	other := httptest.NewRecorder()
+	handler.ServeHTTP(other, request)
+	if other.Code == http.StatusTooManyRequests {
+		t.Fatal("a different IP was limited")
+	}
+}
+
+// TestMatchContentRateLimitDisabled is the regression of the default: no 429
+// ever, whatever the request count.
+func TestMatchContentRateLimitDisabled(t *testing.T) {
+	server := newMatchContentServer(t, 0)
+	handler := server.Handler()
+	for index := 0; index < 10; index++ {
+		recorder := doMatchRequest(handler, http.MethodGet, "/api/MatchContent/1", nil, nil)
+		if recorder.Code == http.StatusTooManyRequests {
+			t.Fatalf("request %d was limited with the limit off", index+1)
+		}
+	}
 }
 
 func TestMatchContentUploadAndDownload(t *testing.T) {

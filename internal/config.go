@@ -1,9 +1,10 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package internal
 
 import (
 	"errors"
 	"fmt"
-	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -31,6 +32,22 @@ type Server struct {
 	// PublicBaseURL is the absolute base used to build downloadUrl. Empty means
 	// the URL is rebuilt from the request (X-Forwarded-* aware).
 	PublicBaseURL string
+	// TLS is the HTTPS settings of the listener.
+	TLS TLS
+}
+
+// TLS holds the HTTPS settings of the listener. The three modes are the
+// deployments this server has: plain HTTP, TLS terminated by this process, and
+// TLS terminated by a reverse proxy in front of it.
+type TLS struct {
+	// Mode is off, on or proxy.
+	Mode string
+	// Folder is where CertName and KeyName live. Empty means
+	// resources/certificates next to the executable.
+	Folder string
+	// Cert and Key override the conventional file names inside Folder.
+	Cert string
+	Key  string
 }
 
 // DB holds the SQLite settings.
@@ -45,13 +62,15 @@ type Log struct {
 	Enabled bool
 	Level   string
 	File    string
+	// MaxSizeBytes rotates the file to <file>.old when it exceeds this size at
+	// startup. Zero means no limit.
+	MaxSizeBytes int64
 }
 
 // Session holds the web session cookie settings.
 type Session struct {
 	TTL        string
 	CookieName string
-	SameSite   string
 }
 
 // CORS holds the browser access settings. The website sends a preflight before
@@ -71,22 +90,15 @@ type Pagination struct {
 	MaxCount     int
 }
 
-// Auth holds the authentication policy.
-type Auth struct {
-	// RequireForReadOnly makes the endpoints the spec declares anonymous
-	// (Games, Tags, Featured, Find, Detail, Related, Reviews) reject requests
-	// without credentials. The spec says they are anonymous and the default
-	// keeps that, but a live probe of api.ageofempires.com answered 401 on
-	// every one of them except Games and Tags. Set this to match that
-	// behaviour once it is confirmed.
-	RequireForReadOnly bool
-}
-
 // Storage holds where Publish writes the uploaded files.
 type Storage struct {
 	// UploadDir is the directory for mod archives and screenshots. Empty
 	// rejects any publish that carries a file.
 	UploadDir string
+	// MaxModFileBytes caps an archive or screenshot as it is streamed to disk.
+	// The multipart size header is client supplied, so the limit is applied to
+	// the bytes actually copied. Zero means no limit.
+	MaxModFileBytes int64
 }
 
 // MatchContent holds the /api/MatchContent storage: the multiplayer savegames
@@ -97,6 +109,10 @@ type MatchContent struct {
 	MaxFileSize  int64
 	MaxTotalSize int64
 	Expiry       string
+	// RateLimitPerMinute caps the requests one client IP may make to the
+	// MatchContent endpoints per minute. Zero disables the limit: no capture
+	// shows a 429, so the default has to stay open.
+	RateLimitPerMinute int
 }
 
 // Config is the process configuration, loaded from TOML, environment and flags.
@@ -107,7 +123,6 @@ type Config struct {
 	Session      Session
 	CORS         CORS
 	Pagination   Pagination
-	Auth         Auth
 	Storage      Storage
 	MatchContent MatchContent
 }
@@ -122,6 +137,7 @@ func DefaultConfig() Config {
 			IdleTimeout:       "60s",
 			MaxBodyBytes:      1 << 20,
 			PublicBaseURL:     "",
+			TLS:               TLS{Mode: "off"},
 		},
 		DB: DB{
 			Path:          "ageAPIServer.db",
@@ -136,7 +152,6 @@ func DefaultConfig() Config {
 		Session: Session{
 			TTL:        "720h",
 			CookieName: ".AgeOfEmpiresServices",
-			SameSite:   "Lax",
 		},
 		CORS: CORS{
 			AllowedOrigins:   []string{"https://www.ageofempires.com"},
@@ -148,18 +163,17 @@ func DefaultConfig() Config {
 			DefaultCount: 30,
 			MaxCount:     20000,
 		},
-		Auth: Auth{
-			RequireForReadOnly: false,
-		},
 		Storage: Storage{
-			UploadDir: "uploads",
+			UploadDir:       "uploads",
+			MaxModFileBytes: 1 << 30,
 		},
 		MatchContent: MatchContent{
-			Enabled:      true,
-			Folder:       "auto",
-			MaxFileSize:  32 << 20,
-			MaxTotalSize: 256 << 20,
-			Expiry:       "12h",
+			Enabled:            true,
+			Folder:             "auto",
+			MaxFileSize:        32 << 20,
+			MaxTotalSize:       256 << 20,
+			Expiry:             "12h",
+			RateLimitPerMinute: 0,
 		},
 	}
 }
@@ -237,6 +251,11 @@ func (c Config) Validate() error {
 	if _, err := time.ParseDuration(c.Server.IdleTimeout); err != nil {
 		return fmt.Errorf("config: Server.IdleTimeout: %w", err)
 	}
+	switch strings.ToLower(c.Server.TLS.Mode) {
+	case "off", "on", "proxy":
+	default:
+		return fmt.Errorf("config: Server.TLS.Mode %q is not one of off, on, proxy", c.Server.TLS.Mode)
+	}
 	if c.DB.MaxOpenConns < 1 {
 		return errors.New("config: DB.MaxOpenConns must be at least 1")
 	}
@@ -254,10 +273,8 @@ func (c Config) Validate() error {
 	if c.Session.CookieName == "" {
 		return errors.New("config: Session.CookieName is required")
 	}
-	switch strings.ToLower(c.Session.SameSite) {
-	case "lax", "strict", "none":
-	default:
-		return fmt.Errorf("config: Session.SameSite %q is not one of Lax, Strict, None", c.Session.SameSite)
+	if c.Log.MaxSizeBytes < 0 {
+		return errors.New("config: Log.MaxSizeBytes must not be negative")
 	}
 	if _, err := time.ParseDuration(c.CORS.MaxAge); err != nil {
 		return fmt.Errorf("config: CORS.MaxAge: %w", err)
@@ -273,6 +290,9 @@ func (c Config) Validate() error {
 	if c.Pagination.MaxCount < 1 {
 		return errors.New("config: Pagination.MaxCount must be at least 1")
 	}
+	if c.Storage.MaxModFileBytes < 0 {
+		return errors.New("config: Storage.MaxModFileBytes must not be negative")
+	}
 	if c.MatchContent.MaxFileSize < 0 {
 		return errors.New("config: MatchContent.MaxFileSize must not be negative")
 	}
@@ -281,6 +301,9 @@ func (c Config) Validate() error {
 	}
 	if _, err := time.ParseDuration(c.MatchContent.Expiry); err != nil {
 		return fmt.Errorf("config: MatchContent.Expiry: %w", err)
+	}
+	if c.MatchContent.RateLimitPerMinute < 0 {
+		return errors.New("config: MatchContent.RateLimitPerMinute must not be negative")
 	}
 	return nil
 }
@@ -295,6 +318,23 @@ func (c Config) ReadHeaderTimeoutDuration() time.Duration {
 func (c Config) IdleTimeoutDuration() time.Duration {
 	d, _ := time.ParseDuration(c.Server.IdleTimeout)
 	return d
+}
+
+// TLSEnabled reports whether this process terminates TLS.
+func (c Config) TLSEnabled() bool {
+	return strings.EqualFold(c.Server.TLS.Mode, "on")
+}
+
+// PublicScheme is the scheme an absolute URL falls back to when neither the
+// request nor a proxy header names one: https when TLS is terminated here or in
+// front of the process, http otherwise.
+func (c Config) PublicScheme() string {
+	switch strings.ToLower(c.Server.TLS.Mode) {
+	case "on", "proxy":
+		return "https"
+	default:
+		return "http"
+	}
 }
 
 // SessionTTLDuration is the parsed Session.TTL.
@@ -313,18 +353,6 @@ func (c Config) CORSMaxAgeDuration() time.Duration {
 func (c Config) MatchContentExpiryDuration() time.Duration {
 	d, _ := time.ParseDuration(c.MatchContent.Expiry)
 	return d
-}
-
-// SameSiteMode maps Session.SameSite to the net/http constant.
-func (c Config) SameSiteMode() http.SameSite {
-	switch strings.ToLower(c.Session.SameSite) {
-	case "strict":
-		return http.SameSiteStrictMode
-	case "none":
-		return http.SameSiteNoneMode
-	default:
-		return http.SameSiteLaxMode
-	}
 }
 
 // lowerKeys lowercases every key of a nested map, so the three configuration

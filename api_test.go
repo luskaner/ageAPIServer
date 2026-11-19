@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package ageAPIServer
 
 import (
@@ -79,7 +81,7 @@ func do(t *testing.T, handler http.Handler, method string, path string, body str
 
 func TestGamesReturnsTheCatalog(t *testing.T) {
 	server, _ := newTestServer(t)
-	recorder := do(t, server.Handler(), http.MethodGet, "/api/v4/mods/Games", "", nil)
+	recorder := do(t, server.Handler(), http.MethodGet, "/api/v4/mods/Games", "", steamAuth())
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("code = %d body=%s", recorder.Code, recorder.Body.String())
 	}
@@ -97,7 +99,7 @@ func TestFindReturnsModList(t *testing.T) {
 	seed(t, path)
 
 	body := `{"q":"","filter":0,"sort":"popular","order":"desc","start":1,"count":30,"game":2,"modid":""}`
-	recorder := do(t, server.Handler(), http.MethodPost, "/api/v4/Mods/Find/", body, nil)
+	recorder := do(t, server.Handler(), http.MethodPost, "/api/v4/Mods/Find/", body, steamAuth())
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("code = %d body=%s", recorder.Code, recorder.Body.String())
 	}
@@ -117,8 +119,8 @@ func TestFindReturnsModList(t *testing.T) {
 	if response.TotalCount == nil || *response.TotalCount != 2 {
 		t.Fatalf("totalCount = %v", response.TotalCount)
 	}
-	if response.IsLoggedOn {
-		t.Fatal("anonymous request reported as logged on")
+	if !response.IsLoggedOn {
+		t.Fatal("authenticated request reported as anonymous")
 	}
 	if response.ModList[0].ModID != 200 {
 		t.Fatalf("popular sort put %d first", response.ModList[0].ModID)
@@ -127,7 +129,7 @@ func TestFindReturnsModList(t *testing.T) {
 
 func TestFindRejectsMissingGame(t *testing.T) {
 	server, _ := newTestServer(t)
-	recorder := do(t, server.Handler(), http.MethodPost, "/api/v4/Mods/Find/", `{"count":10}`, nil)
+	recorder := do(t, server.Handler(), http.MethodPost, "/api/v4/Mods/Find/", `{"count":10}`, steamAuth())
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("code = %d, want 400", recorder.Code)
 	}
@@ -135,7 +137,7 @@ func TestFindRejectsMissingGame(t *testing.T) {
 
 func TestDetailReturnsNotFound(t *testing.T) {
 	server, _ := newTestServer(t)
-	recorder := do(t, server.Handler(), http.MethodGet, "/api/v4/Mods/Detail/999999", "", nil)
+	recorder := do(t, server.Handler(), http.MethodGet, "/api/v4/Mods/Detail/999999", "", steamAuth())
 	if recorder.Code != http.StatusNotFound {
 		t.Fatalf("code = %d, want 404", recorder.Code)
 	}
@@ -148,7 +150,7 @@ func TestNormalizationIsTransparent(t *testing.T) {
 		"//api//v4//mods//games//",
 		"/api/v4/mods/Games/",
 	} {
-		recorder := do(t, server.Handler(), http.MethodGet, path, "", nil)
+		recorder := do(t, server.Handler(), http.MethodGet, path, "", steamAuth())
 		if recorder.Code != http.StatusOK {
 			t.Fatalf("%s: code = %d", path, recorder.Code)
 		}
@@ -180,6 +182,7 @@ func TestMountUnderPrefix(t *testing.T) {
 	mux.Handle("/aoeMods/", http.StripPrefix("/aoeMods", server.Handler()))
 
 	request := httptest.NewRequest(http.MethodGet, "/aoeMods/api/v4/mods/Games", nil)
+	request.Header.Set("Authorization", steamToken())
 	recorder := httptest.NewRecorder()
 	mux.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusOK {
@@ -288,7 +291,7 @@ func TestAuthenticatedFlow(t *testing.T) {
 
 	// Reviews accepts ratingNum 7 without validating it against 1..5.
 	recorder = do(t, handler, http.MethodPost, "/api/v4/mods/Reviews",
-		`{"modId":"100","page":1,"count":5,"ratingNum":7,"ratingLabel":"ratings"}`, nil)
+		`{"modId":"100","page":1,"count":5,"ratingNum":7,"ratingLabel":"ratings"}`, auth)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("reviews: %d %s", recorder.Code, recorder.Body.String())
 	}
@@ -351,7 +354,7 @@ func TestAuthenticatedFlow(t *testing.T) {
 // GET /api/v4/mods/Games returns, including the short Retold title.
 func TestGamesMatchesUpstreamPayload(t *testing.T) {
 	server, _ := newTestServer(t)
-	recorder := do(t, server.Handler(), http.MethodGet, "/api/v4/mods/Games", "", nil)
+	recorder := do(t, server.Handler(), http.MethodGet, "/api/v4/mods/Games", "", steamAuth())
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("code = %d body=%s", recorder.Code, recorder.Body.String())
 	}
@@ -375,7 +378,7 @@ func TestTagsMatchesUpstreamCatalog(t *testing.T) {
 	}
 
 	server, _ := newTestServer(t)
-	recorder := do(t, server.Handler(), http.MethodGet, "/api/v4/mods/Tags", "", nil)
+	recorder := do(t, server.Handler(), http.MethodGet, "/api/v4/mods/Tags", "", steamAuth())
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("code = %d body=%s", recorder.Code, recorder.Body.String())
 	}
@@ -400,15 +403,10 @@ func TestUnauthorizedBodyMatchesUpstream(t *testing.T) {
 	}
 }
 
-// TestRequireAuthForReadOnly checks the opt-in that makes the endpoints the
-// spec declares anonymous reject requests without credentials.
-func TestRequireAuthForReadOnly(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "test.db")
-	server, err := New(Config{DBPath: path, RequireAuthForReadOnly: true})
-	if err != nil {
-		t.Fatalf("new server: %v", err)
-	}
-	t.Cleanup(func() { _ = server.Shutdown(context.Background()) })
+// TestReadOnlyRoutesRejectAnonymous checks that the read endpoints the spec
+// declares authenticated reject requests without credentials.
+func TestReadOnlyRoutesRejectAnonymous(t *testing.T) {
+	server, _ := newTestServer(t)
 
 	body := `{"game":2,"start":1,"count":5}`
 	recorder := do(t, server.Handler(), http.MethodPost, "/api/v4/Mods/Find/", body, nil)

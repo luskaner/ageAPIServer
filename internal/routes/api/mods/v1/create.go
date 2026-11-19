@@ -1,6 +1,9 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package v1
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 
@@ -54,8 +57,12 @@ func Create(deps shared.Deps) http.HandlerFunc {
 		}
 
 		if form.File != nil {
-			saved, err := shared.SaveUpload(deps.UploadDir, form.File)
+			saved, err := shared.SaveUpload(deps.UploadDir, form.File, deps.MaxModFileBytes)
 			if err != nil {
+				if errors.Is(err, models.ErrFileTooLarge) {
+					shared.WriteError(w, http.StatusBadRequest, shared.CodeBadRequest, "mod file is too large")
+					return
+				}
 				shared.WriteError(w, http.StatusInternalServerError, shared.CodeInternal, err.Error())
 				return
 			}
@@ -64,8 +71,12 @@ func Create(deps shared.Deps) http.HandlerFunc {
 			input.FileSize = saved.Size
 			input.DiskSize = shared.DiskSize(form.File)
 		}
-		images, err := shared.PublishImages(deps.UploadDir, form)
+		images, err := shared.PublishImages(deps.UploadDir, form, deps.MaxModFileBytes)
 		if err != nil {
+			if errors.Is(err, models.ErrFileTooLarge) {
+				shared.WriteError(w, http.StatusBadRequest, shared.CodeBadRequest, "image is too large")
+				return
+			}
 			shared.WriteError(w, http.StatusInternalServerError, shared.CodeInternal, err.Error())
 			return
 		}

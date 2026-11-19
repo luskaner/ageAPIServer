@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package matchcontent
 
 import (
@@ -28,7 +30,7 @@ func Download(deps shared.Deps) http.HandlerFunc {
 			return
 		}
 		defer func() { _ = rc.Close() }()
-		fileURL := shared.BaseURL(r, deps.PublicBaseURL) +
+		fileURL := shared.BaseURL(r, deps.PublicBaseURL, deps.PublicScheme) +
 			"/api/MatchContent/" + strconv.FormatInt(int64(cf.Id), 10) + "/file/" + cf.MD5
 		name := cf.OriginalFilename
 		if name == "" {

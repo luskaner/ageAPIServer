@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package v4
 
 import (
@@ -90,7 +92,7 @@ func CheckAndPublishFile(deps shared.Deps) http.HandlerFunc {
 				shared.WriteError(w, http.StatusInternalServerError, shared.CodeInternal, err.Error())
 				return
 			}
-			if err := deps.Stores.Mods.AttachFile(r.Context(), modID, saved.Path, saved.CRC, saved.Size, saved.Size); err != nil {
+			if err := deps.Stores.Mods.AttachFile(r.Context(), modID, saved.Path, saved.CRC, saved.Size); err != nil {
 				shared.WriteStoreError(w, err)
 				return
 			}

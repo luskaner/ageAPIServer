@@ -37,15 +37,16 @@ MaxOpenConns = 1
 
 [Log]
 Enabled = true
+# Minimum level written to the file; the console always shows every line.
 Level = "info"
 File = "ageAPIServer.log"
+# Rotate the file to <File>.old at startup when it is bigger than this. 0
+# disables the rotation; use logrotate or a scheduled task for anything richer.
+MaxSizeBytes = 0
 
 [Session]
 TTL = "720h"
 CookieName = ".AgeOfEmpiresServices"
-# Lax works while the website and the API share a registrable domain. A
-# cross-site deployment needs None (and HTTPS).
-SameSite = "Lax"
 
 [CORS]
 AllowedOrigins = ["https://www.ageofempires.com"]
@@ -63,6 +64,9 @@ MaxCount = 20000
 # Where Publish writes the mod archive and its screenshots. Empty rejects any
 # publish that carries a file.
 UploadDir = "uploads"
+# Maximum size of one archive or screenshot, applied to the bytes actually
+# streamed (the multipart size header is client supplied). 0 disables it.
+MaxModFileBytes = 1073741824
 
 # CONFIGURING CUSTOM FILES
 # Serves the /api/MatchContent endpoints used by the game to upload and
@@ -90,3 +94,7 @@ MaxTotalSize = 268435456
 # 1h30m). Files are also purged at startup if older than this. 0 keeps them
 # until they are evicted.
 Expiry = "12h"
+
+# Maximum requests one client IP may make to the MatchContent endpoints per
+# minute. 0 (the default) disables the limit: no capture shows a 429.
+RateLimitPerMinute = 0

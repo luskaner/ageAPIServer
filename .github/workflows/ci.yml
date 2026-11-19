@@ -10,46 +10,43 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version: "1.27.x"
+      # gofmt -l . would also walk the ignored local toolchain in .tools/.
       - name: gofmt
-        run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
+        run: test -z "$(gofmt -l $(git ls-files '*.go'))" || (gofmt -l $(git ls-files '*.go') && exit 1)
+      - name: tidy
+        run: go mod tidy -diff
       - name: vet
         run: go vet ./...
       - name: build
         run: go build ./...
+      # tools/scripts is a separate module: the root go build never sees it.
+      - name: tools/scripts vet
+        working-directory: tools/scripts
+        run: go vet ./...
+      - name: tools/scripts build
+        working-directory: tools/scripts
+        run: go build ./...
+      # -coverpkg makes the HTTP tests of the root package count for the handler
+      # packages they exercise; without it those packages report 0% and the
+      # aggregate says nothing about the wire surface.
       - name: test
-        run: go test -race ./...
-
-  release:
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: test
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include:
-          - goos: windows
-            goarch: amd64
-          - goos: linux
-            goarch: amd64
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+        run: go test -race -covermode=atomic -coverpkg=./... -coverprofile cover.out ./...
+      - name: upload coverage
+        uses: actions/upload-artifact@v4
         with:
-          go-version: "1.27.x"
-      - name: build
-        env:
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
-          CGO_ENABLED: "0"
-        run: |
-          go build -trimpath \
-            -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" \
-            -o ageAPIServer-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.goos == 'windows' && '.exe' || '' }} \
-            ./cmd/ageAPIServer
-      - uses: actions/upload-artifact@v4
+          name: coverage
+          path: cover.out
+      # The generator is the only way .goreleaser.yaml is produced; check its
+      # output instead of a checked-in file. The toolchain path is not resolved
+      # by `check`, so a placeholder is enough here.
+      - name: generate goreleaser config
+        run: cd tools/scripts && go run ./cmd/generateGoreleaserConfig.go /tmp/go-legacy
+      - name: goreleaser check
+        uses: goreleaser/goreleaser-action@v7
         with:
-          name: ageAPIServer-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: ageAPIServer-${{ matrix.goos }}-${{ matrix.goarch }}*
+          version: "~> v2"
+          args: check

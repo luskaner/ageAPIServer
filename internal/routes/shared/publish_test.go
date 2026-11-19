@@ -1,7 +1,11 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package shared
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +13,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/luskaner/ageAPIServer/internal/models"
 )
 
 // multipartRequest builds a POST with the given text fields and files.
@@ -148,7 +154,7 @@ func TestSaveUploadStoresTheContentOnce(t *testing.T) {
 	}
 	header := request.MultipartForm.File["modFiles"][0]
 
-	first, err := SaveUpload(dir, header)
+	first, err := SaveUpload(dir, header, 0)
 	if err != nil {
 		t.Fatalf("save: %v", err)
 	}
@@ -163,7 +169,7 @@ func TestSaveUploadStoresTheContentOnce(t *testing.T) {
 	}
 
 	// The same bytes must not create a second file.
-	second, err := SaveUpload(dir, header)
+	second, err := SaveUpload(dir, header, 0)
 	if err != nil {
 		t.Fatalf("second save: %v", err)
 	}
@@ -179,13 +185,120 @@ func TestSaveUploadStoresTheContentOnce(t *testing.T) {
 	}
 }
 
+// TestSaveUploadEnforcesTheStreamedLimit pins the cap of an upload: the error
+// is the sentinel the handlers map to 400, and no temporary file survives.
+func TestSaveUploadEnforcesTheStreamedLimit(t *testing.T) {
+	dir := t.TempDir()
+	request := multipartRequest(t, nil, map[string]string{"modFiles": strings.Repeat("x", 64)})
+	if err := request.ParseMultipartForm(maxPublishMemory); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	header := request.MultipartForm.File["modFiles"][0]
+
+	if _, err := SaveUpload(dir, header, 16); !errors.Is(err, models.ErrFileTooLarge) {
+		t.Fatalf("err = %v, want ErrFileTooLarge", err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read dir: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("oversized upload left %d files", len(entries))
+	}
+}
+
+// TestValidateWebPublish pins the rules of the website form on their own: the
+// handler only chooses when to apply them.
+func TestValidateWebPublish(t *testing.T) {
+	file := func(name string) *multipart.FileHeader { return &multipart.FileHeader{Filename: name} }
+	base := func() PublishForm {
+		return PublishForm{
+			Description: "a description",
+			TagIDs:      []int64{1},
+			ImageMeta:   []ImageMeta{{ImageName: "shot.png"}},
+			Images:      []*multipart.FileHeader{file("shot.png")},
+			File:        file("mod.zip"),
+		}
+	}
+	if err := ValidateWebPublish(base()); err != nil {
+		t.Fatalf("valid form rejected: %v", err)
+	}
+
+	cases := []struct {
+		name   string
+		want   string
+		mutate func(*PublishForm)
+	}{
+		{"description", "description is required", func(f *PublishForm) { f.Description = "  " }},
+		{"no images", "between 1 and 5 images are required", func(f *PublishForm) {
+			f.ImageMeta = nil
+			f.Images = nil
+		}},
+		{"six images", "between 1 and 5 images are required", func(f *PublishForm) {
+			f.ImageMeta = make([]ImageMeta, 6)
+			f.Images = make([]*multipart.FileHeader, 6)
+			for i := 0; i < 6; i++ {
+				name := fmt.Sprintf("shot%d.png", i)
+				f.ImageMeta[i] = ImageMeta{ImageName: name}
+				f.Images[i] = file(name)
+			}
+		}},
+		{"tags", "at most 7 tags are allowed", func(f *PublishForm) {
+			f.TagIDs = []int64{1, 2, 3, 4, 5, 6, 7, 8}
+		}},
+		{"image format", "unsupported image format", func(f *PublishForm) {
+			f.ImageMeta = []ImageMeta{{ImageName: "shot.exe"}}
+			f.Images = []*multipart.FileHeader{file("shot.exe")}
+		}},
+		{"archive format", "mod file must be a .zip", func(f *PublishForm) { f.File = file("mod.sga") }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			form := base()
+			tc.mutate(&form)
+			err := ValidateWebPublish(form)
+			if err == nil || err.Error() != tc.want {
+				t.Fatalf("err = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestParseBlockListAcceptsNewlineIDs(t *testing.T) {
+	ids := ParseBlockList([]byte("00000000\n00000001\r\n\n"))
+	if len(ids) != 2 || ids[0] != "00000000" || ids[1] != "00000001" {
+		t.Fatalf("ids = %v", ids)
+	}
+}
+
+func TestStageBlockNeedsADirectory(t *testing.T) {
+	if _, err := StageBlock("", 1, "00000000", strings.NewReader("data")); err == nil {
+		t.Fatal("an empty directory was accepted")
+	}
+}
+
+func TestSaveStagedBlocksReportsAMissingPart(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "missing-block")
+	if _, err := SaveStagedBlocks(t.TempDir(), []string{missing}); err == nil {
+		t.Fatal("a missing block was accepted")
+	}
+}
+
+func TestDecodeLocalizedKeepsAnInvalidObject(t *testing.T) {
+	for _, raw := range []string{"plain text", `{"es":`, "{"} {
+		if got := decodeLocalized(raw); got != raw {
+			t.Fatalf("decodeLocalized(%q) = %q", raw, got)
+		}
+	}
+}
+
 func TestSaveUploadNeedsADirectory(t *testing.T) {
 	request := multipartRequest(t, nil, map[string]string{"modFiles": "payload"})
 	if err := request.ParseMultipartForm(maxPublishMemory); err != nil {
 		t.Fatalf("parse: %v", err)
 	}
 	header := request.MultipartForm.File["modFiles"][0]
-	if _, err := SaveUpload("", header); err == nil {
+	if _, err := SaveUpload("", header, 0); err == nil {
 		t.Fatal("an empty directory was accepted")
 	}
 }
@@ -200,7 +313,7 @@ func TestSaveUploadRejectsADirectoryThatIsAFile(t *testing.T) {
 		t.Fatalf("parse: %v", err)
 	}
 	header := request.MultipartForm.File["modFiles"][0]
-	if _, err := SaveUpload(blocker, header); err == nil {
+	if _, err := SaveUpload(blocker, header, 0); err == nil {
 		t.Fatal("a directory that is a file was accepted")
 	}
 }
@@ -208,7 +321,7 @@ func TestSaveUploadRejectsADirectoryThatIsAFile(t *testing.T) {
 func TestSaveUploadRejectsAnUnreadableHeader(t *testing.T) {
 	// A header whose temporary file is gone cannot be opened.
 	header := &multipart.FileHeader{Filename: "gone.zip"}
-	if _, err := SaveUpload(t.TempDir(), header); err == nil {
+	if _, err := SaveUpload(t.TempDir(), header, 0); err == nil {
 		t.Fatal("a header without content was accepted")
 	}
 }

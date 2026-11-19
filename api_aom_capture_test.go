@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package ageAPIServer
 
 import (
@@ -180,7 +182,7 @@ func TestAOMPublishCarriesTheArchiveAndTheTags(t *testing.T) {
 // seedFeaturedAOM inserts the two Featured rows the shape of the capture
 // needs: 286553 whose type resolves for game 1001, and a mod with the type
 // id 1 the catalog of the game does not sell.
-func seedFeaturedAOM(t *testing.T, server *Server, path string) {
+func seedFeaturedAOM(t *testing.T, path string) {
 	t.Helper()
 	stores, err := models.Open(models.Options{Path: path, MaxOpenConns: 1})
 	if err != nil {
@@ -212,7 +214,7 @@ func seedFeaturedAOM(t *testing.T, server *Server, path string) {
 func TestAOMFeaturedAndUnknownTypeName(t *testing.T) {
 	server, path := newTestServer(t)
 	seed(t, path)
-	seedFeaturedAOM(t, server, path)
+	seedFeaturedAOM(t, path)
 	handler := server.Handler()
 
 	recorder := do(t, handler, http.MethodPost, "/api/v4/mods/Featured", `{"game":1001}`, steamAuth())

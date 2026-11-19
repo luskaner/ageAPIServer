@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package ageAPIServer
 
 import (
@@ -24,7 +26,7 @@ func TestListResponsesCarryTheUpstreamEnvelope(t *testing.T) {
 	seed(t, path)
 
 	body := `{"q":"","filter":0,"sort":"popular","order":"desc","start":1,"count":30,"game":2,"modid":""}`
-	recorder := do(t, server.Handler(), http.MethodPost, "/api/v4/Mods/Find/", body, nil)
+	recorder := do(t, server.Handler(), http.MethodPost, "/api/v4/Mods/Find/", body, steamAuth())
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("code = %d body=%s", recorder.Code, recorder.Body.String())
 	}
@@ -56,7 +58,7 @@ func TestRatingsIsAlwaysAnObject(t *testing.T) {
 	seed(t, path)
 
 	body := `{"game":2,"start":1,"count":30}`
-	recorder := do(t, server.Handler(), http.MethodPost, "/api/v4/Mods/Find/", body, nil)
+	recorder := do(t, server.Handler(), http.MethodPost, "/api/v4/Mods/Find/", body, steamAuth())
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("code = %d body=%s", recorder.Code, recorder.Body.String())
 	}
@@ -142,7 +144,7 @@ func TestReviewsTotalCountIsNullWhenEmpty(t *testing.T) {
 	seed(t, path)
 
 	recorder := do(t, server.Handler(), http.MethodPost, "/api/v4/mods/Reviews",
-		`{"modId":"100","page":1,"count":5}`, nil)
+		`{"modId":"100","page":1,"count":5}`, steamAuth())
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("code = %d body=%s", recorder.Code, recorder.Body.String())
 	}
@@ -161,7 +163,7 @@ func TestRelatedEchoesAFixedPage(t *testing.T) {
 	server, path := newTestServer(t)
 	seed(t, path)
 
-	recorder := do(t, server.Handler(), http.MethodGet, "/api/v4/mods/Related/100", "", nil)
+	recorder := do(t, server.Handler(), http.MethodGet, "/api/v4/mods/Related/100", "", steamAuth())
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("code = %d body=%s", recorder.Code, recorder.Body.String())
 	}
@@ -237,7 +239,7 @@ func TestReviewsRejectsBadInput(t *testing.T) {
 		"empty body":     ``,
 	} {
 		t.Run(name, func(t *testing.T) {
-			recorder := do(t, handler, http.MethodPost, "/api/v4/mods/Reviews", body, nil)
+			recorder := do(t, handler, http.MethodPost, "/api/v4/mods/Reviews", body, steamAuth())
 			if recorder.Code != http.StatusBadRequest {
 				t.Fatalf("code = %d, want 400", recorder.Code)
 			}
@@ -250,12 +252,12 @@ func TestRelatedRejectsBadInput(t *testing.T) {
 	server, _ := newTestServer(t)
 	handler := server.Handler()
 
-	recorder := do(t, handler, http.MethodGet, "/api/v4/mods/Related/abc", "", nil)
+	recorder := do(t, handler, http.MethodGet, "/api/v4/mods/Related/abc", "", steamAuth())
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("non numeric id: code = %d, want 400", recorder.Code)
 	}
 
-	recorder = do(t, handler, http.MethodGet, "/api/v4/mods/Related/999", "", nil)
+	recorder = do(t, handler, http.MethodGet, "/api/v4/mods/Related/999", "", steamAuth())
 	if recorder.Code != http.StatusNoContent {
 		// The capture of a deleted mod answers 204 instead of an error.
 		t.Fatalf("unknown mod: code = %d, want 204", recorder.Code)

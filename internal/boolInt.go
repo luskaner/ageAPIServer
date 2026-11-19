@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package internal
 
 // SQLite has no boolean type: flags are stored as 0/1 integers and rendered as

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package internal
 
 import (
@@ -74,10 +76,126 @@ func TestLoadFromFile(t *testing.T) {
 	}
 }
 
+func TestLoadTLSDefaultsToPlainHTTP(t *testing.T) {
+	cfg, _, err := Load("", nil)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.Server.TLS.Mode != "off" {
+		t.Fatalf("mode = %q", cfg.Server.TLS.Mode)
+	}
+	if cfg.TLSEnabled() {
+		t.Fatal("TLS reported as terminated here")
+	}
+	if cfg.PublicScheme() != "http" {
+		t.Fatalf("scheme = %q", cfg.PublicScheme())
+	}
+}
+
+func TestLoadTLSModes(t *testing.T) {
+	cases := map[string]struct {
+		tlsEnabled bool
+		scheme     string
+	}{
+		"on":    {tlsEnabled: true, scheme: "https"},
+		"proxy": {tlsEnabled: false, scheme: "https"},
+		"off":   {tlsEnabled: false, scheme: "http"},
+	}
+	for mode, want := range cases {
+		t.Run(mode, func(t *testing.T) {
+			t.Setenv("AGEAPISERVER_SERVER_TLS_MODE", mode)
+			cfg, _, err := Load("", nil)
+			if err != nil {
+				t.Fatalf("load: %v", err)
+			}
+			if cfg.Server.TLS.Mode != mode {
+				t.Fatalf("mode = %q", cfg.Server.TLS.Mode)
+			}
+			if cfg.TLSEnabled() != want.tlsEnabled {
+				t.Fatalf("tls enabled = %v, want %v", cfg.TLSEnabled(), want.tlsEnabled)
+			}
+			if cfg.PublicScheme() != want.scheme {
+				t.Fatalf("scheme = %q, want %q", cfg.PublicScheme(), want.scheme)
+			}
+		})
+	}
+}
+
+func TestLoadRejectsUnknownTLSMode(t *testing.T) {
+	t.Setenv("AGEAPISERVER_SERVER_TLS_MODE", "maybe")
+	if _, _, err := Load("", nil); err == nil {
+		t.Fatal("unknown TLS mode accepted")
+	}
+}
+
 func TestLoadRejectsInvalidValues(t *testing.T) {
 	t.Setenv("AGEAPISERVER_LOG_LEVEL", "loud")
 	if _, _, err := Load("", nil); err == nil {
 		t.Fatal("invalid log level accepted")
+	}
+}
+
+// TestValidateRejectsEveryBrokenField is the table of the validation gates: one
+// case per rejected key, plus the valid default.
+func TestValidateRejectsEveryBrokenField(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(*Config)
+	}{
+		{"addr", func(c *Config) { c.Server.Addr = "" }},
+		{"max body", func(c *Config) { c.Server.MaxBodyBytes = 0 }},
+		{"read header timeout", func(c *Config) { c.Server.ReadHeaderTimeout = "nope" }},
+		{"idle timeout", func(c *Config) { c.Server.IdleTimeout = "nope" }},
+		{"tls mode", func(c *Config) { c.Server.TLS.Mode = "maybe" }},
+		{"db max open conns", func(c *Config) { c.DB.MaxOpenConns = 0 }},
+		{"db busy timeout", func(c *Config) { c.DB.BusyTimeoutMs = -1 }},
+		{"log level", func(c *Config) { c.Log.Level = "loud" }},
+		{"log max size", func(c *Config) { c.Log.MaxSizeBytes = -1 }},
+		{"session ttl", func(c *Config) { c.Session.TTL = "nope" }},
+		{"cookie name", func(c *Config) { c.Session.CookieName = "" }},
+		{"cors max age", func(c *Config) { c.CORS.MaxAge = "nope" }},
+		{"pagination base", func(c *Config) { c.Pagination.Base = "rows" }},
+		{"pagination default count", func(c *Config) { c.Pagination.DefaultCount = -1 }},
+		{"pagination max count", func(c *Config) { c.Pagination.MaxCount = 0 }},
+		{"max mod file bytes", func(c *Config) { c.Storage.MaxModFileBytes = -1 }},
+		{"match max file size", func(c *Config) { c.MatchContent.MaxFileSize = -1 }},
+		{"match max total size", func(c *Config) { c.MatchContent.MaxTotalSize = -1 }},
+		{"match expiry", func(c *Config) { c.MatchContent.Expiry = "nope" }},
+		{"match rate limit", func(c *Config) { c.MatchContent.RateLimitPerMinute = -1 }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := DefaultConfig()
+			tc.mutate(&cfg)
+			if err := cfg.Validate(); err == nil {
+				t.Fatal("invalid value accepted")
+			}
+		})
+	}
+	if err := DefaultConfig().Validate(); err != nil {
+		t.Fatalf("defaults rejected: %v", err)
+	}
+}
+
+func TestLoadStorageDefaults(t *testing.T) {
+	cfg, _, err := Load("", nil)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.Storage.MaxModFileBytes != 1<<30 {
+		t.Fatalf("max mod file bytes = %d", cfg.Storage.MaxModFileBytes)
+	}
+	if cfg.Log.MaxSizeBytes != 0 {
+		t.Fatalf("log max size = %d", cfg.Log.MaxSizeBytes)
+	}
+	if cfg.MatchContent.RateLimitPerMinute != 0 {
+		t.Fatalf("rate limit = %d", cfg.MatchContent.RateLimitPerMinute)
+	}
+}
+
+func TestLoadRejectsAConfigPathThatIsADirectory(t *testing.T) {
+	if _, _, err := Load(t.TempDir(), nil); err == nil {
+		t.Fatal("a directory was accepted as a config file")
 	}
 }
 
@@ -94,21 +212,6 @@ func TestLoadIgnoresMissingFile(t *testing.T) {
 	}
 }
 
-func TestSameSiteMode(t *testing.T) {
-	cases := map[string]int{
-		"Lax":    2,
-		"Strict": 3,
-		"None":   4,
-	}
-	for value, want := range cases {
-		cfg := DefaultConfig()
-		cfg.Session.SameSite = value
-		if got := int(cfg.SameSiteMode()); got != want {
-			t.Fatalf("%s: got %d, want %d", value, got, want)
-		}
-	}
-}
-
 // TestEnvironmentOverridesFile is the regression of the case-sensitive koanf
 // key bug: the file writes "Server.Addr" and the environment "server.addr", and
 // the environment must win regardless of the merge order.
@@ -120,7 +223,7 @@ func TestEnvironmentOverridesFile(t *testing.T) {
 	}
 	t.Setenv("AGEAPISERVER_SERVER_ADDR", ":4321")
 
-	for attempt := 0; attempt < 20; attempt++ {
+	for attempt := range 20 {
 		cfg, _, err := Load(path, nil)
 		if err != nil {
 			t.Fatalf("load: %v", err)
@@ -166,25 +269,6 @@ func TestLoadMatchContentConfig(t *testing.T) {
 	if cfg.MatchContent.Folder != "match-store" || cfg.MatchContent.MaxFileSize != 1024 ||
 		cfg.MatchContent.MaxTotalSize != 4096 || cfg.MatchContentExpiryDuration() != 30*time.Minute {
 		t.Fatalf("match content from file = %+v", cfg.MatchContent)
-	}
-}
-
-func TestLoadAuthRequireForReadOnly(t *testing.T) {
-	cfg, _, err := Load("", nil)
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
-	if cfg.Auth.RequireForReadOnly {
-		t.Fatal("RequireForReadOnly must default to false: the spec declares those endpoints anonymous")
-	}
-
-	t.Setenv("AGEAPISERVER_AUTH_REQUIREFORREADONLY", "true")
-	cfg, _, err = Load("", nil)
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
-	if !cfg.Auth.RequireForReadOnly {
-		t.Fatal("environment did not override Auth.RequireForReadOnly")
 	}
 }
 

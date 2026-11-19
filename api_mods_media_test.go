@@ -1,9 +1,12 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package ageAPIServer
 
 import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -120,7 +123,7 @@ func TestListResponsesCarryAbsoluteMediaURLs(t *testing.T) {
 	server, _ := mediaServer(t)
 
 	body := `{"q":"","filter":0,"sort":"popular","order":"desc","start":1,"count":30,"game":2,"modid":""}`
-	recorder := do(t, server.Handler(), http.MethodPost, "/api/v4/Mods/Find/", body, nil)
+	recorder := do(t, server.Handler(), http.MethodPost, "/api/v4/Mods/Find/", body, steamAuth())
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("code = %d body=%s", recorder.Code, recorder.Body.String())
 	}
@@ -133,7 +136,8 @@ func TestListResponsesCarryAbsoluteMediaURLs(t *testing.T) {
 	if len(response.ModList) != 1 || len(response.ModList[0].ImageURLs) != 1 {
 		t.Fatalf("modList = %+v", response.ModList)
 	}
-	want := "http://example.com/api/v4/mods/image/shot.png"
+	wantURL := url.URL{Scheme: "http", Host: "example.com", Path: "/api/v4/mods/image/shot.png"}
+	want := wantURL.String()
 	if got := response.ModList[0].ImageURLs[0].ImageThumbnail; got != want {
 		t.Fatalf("imageThumbnail = %q, want %q", got, want)
 	}

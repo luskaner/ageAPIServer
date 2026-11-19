@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package ageAPIServer
 
 import (
@@ -154,7 +156,7 @@ func TestFindEchoNormalizesModIdAndOrder(t *testing.T) {
 	seed(t, path)
 
 	recorder := do(t, server.Handler(), http.MethodPost, "/api/v4/Mods/Find/",
-		`{"game":3,"start":1,"count":30,"order":"desc","sort":"createDate"}`, nil)
+		`{"game":3,"start":1,"count":30,"order":"desc","sort":"createDate"}`, xblAuth())
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("find: %d %s", recorder.Code, recorder.Body.String())
 	}
@@ -167,7 +169,7 @@ func TestFindEchoNormalizesModIdAndOrder(t *testing.T) {
 	}
 
 	recorder = do(t, server.Handler(), http.MethodPost, "/api/v4/Mods/Find/",
-		`{"game":3,"modid":0}`, nil)
+		`{"game":3,"modid":0}`, xblAuth())
 	params = decodeMap(t, recorder.Body.Bytes())["searchParams"].(map[string]any)
 	if params["modid"] != "0" {
 		t.Fatalf("numeric modid echo = %v, want the string", params["modid"])
@@ -206,7 +208,7 @@ func TestRelatedHidesTheTags(t *testing.T) {
 	server, path := newTestServer(t)
 	seed(t, path)
 
-	recorder := do(t, server.Handler(), http.MethodGet, "/api/v4/mods/Related/100", "", nil)
+	recorder := do(t, server.Handler(), http.MethodGet, "/api/v4/mods/Related/100", "", xblAuth())
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("related: %d %s", recorder.Code, recorder.Body.String())
 	}

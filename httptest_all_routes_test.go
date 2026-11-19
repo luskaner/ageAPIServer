@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package ageAPIServer
 
 import (
@@ -14,6 +16,25 @@ func routePath(path string) string {
 	path = strings.ReplaceAll(path, "{matchid}", "1")
 	path = strings.ReplaceAll(path, "{hash}", "missing")
 	return path
+}
+
+// TestCORSAdvertisesTheInventoryMethods pins the header to the inventory, not
+// to a literal: the PUT of CheckAndPublishFile has to be advertised for the
+// browser preflight to let the upload through.
+func TestCORSAdvertisesTheInventoryMethods(t *testing.T) {
+	server, _ := newTestServer(t)
+	want := strings.Join(inventoryMethods(server.Routes()), ", ")
+	if !strings.Contains(want, "PUT") {
+		t.Fatalf("inventory methods = %q, want PUT", want)
+	}
+	recorder := do(t, server.Handler(), http.MethodOptions, "/api/v4/mods/checkandpublishfile", "",
+		map[string]string{
+			"Origin":                        "https://www.ageofempires.com",
+			"Access-Control-Request-Method": "PUT",
+		})
+	if got := recorder.Header().Get("Access-Control-Allow-Methods"); got != want {
+		t.Fatalf("allow-methods = %q, want %q", got, want)
+	}
 }
 
 // TestAllRoutesAnswerPreflight checks that every registered route answers the

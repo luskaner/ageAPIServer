@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Package initializer builds the stores from the process configuration. It is
 // the single place that knows how a database path becomes a set of stores, so
 // the command and the tests construct them the same way.

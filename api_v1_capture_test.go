@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package ageAPIServer
 
 import (
@@ -277,7 +279,7 @@ func TestCreateMatchesTheLegacyCapture(t *testing.T) {
 		meta["isOwner"] != true || meta["isLoggedOn"] != true ||
 		meta["modStatusId"] != nil || meta["changeList"] != nil ||
 		meta["modVersion"] != float64(0) ||
-		meta["modDiskSize"] != float64(*detail.ModDiskSize) {
+		meta["modDiskSize"] != *detail.ModDiskSize {
 		t.Fatalf("legacy metaData = %v", meta)
 	}
 	tags, ok := outer["modTags"].([]any)

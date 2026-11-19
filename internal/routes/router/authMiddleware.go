@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package router
 
 import (
@@ -34,7 +36,7 @@ func (a *Authenticator) Resolve(r *http.Request) (models.Viewer, error) {
 			if err != nil {
 				return models.Viewer{}, err
 			}
-			return models.Viewer{UserID: user.UserID, SteamID: user.SteamID, LoggedOn: true}, nil
+			return models.Viewer{UserID: user.UserID, SteamID: user.SteamID, LoggedOn: true, Scheme: models.SchemeSteam}, nil
 		}
 		if xuid, found := strings.CutPrefix(header, xblScheme); found {
 			// The id ends where the semicolon starts the token.
@@ -45,7 +47,7 @@ func (a *Authenticator) Resolve(r *http.Request) (models.Viewer, error) {
 			if err != nil {
 				return models.Viewer{}, err
 			}
-			return models.Viewer{UserID: user.UserID, SteamID: user.SteamID, LoggedOn: true}, nil
+			return models.Viewer{UserID: user.UserID, SteamID: user.SteamID, LoggedOn: true, Scheme: models.SchemeXBL}, nil
 		}
 	}
 	if a.CookieName != "" {
@@ -54,7 +56,7 @@ func (a *Authenticator) Resolve(r *http.Request) (models.Viewer, error) {
 			if err != nil {
 				return models.Viewer{}, err
 			}
-			return models.Viewer{UserID: user.UserID, SteamID: user.SteamID, LoggedOn: true}, nil
+			return models.Viewer{UserID: user.UserID, SteamID: user.SteamID, LoggedOn: true, Scheme: models.SchemeCookie}, nil
 		}
 	}
 	return models.Viewer{}, nil

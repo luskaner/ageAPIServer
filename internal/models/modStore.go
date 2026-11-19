@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package models
 
 import (
@@ -7,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -94,7 +97,7 @@ func (s *ModStore) Games(ctx context.Context) ([]Game, error) {
 // Tags returns the mod types, optionally filtered by game.
 func (s *ModStore) Tags(ctx context.Context, gameTitleID int64) ([]ModTag, error) {
 	query := `SELECT modTypeId, modTypeName, gameTitleId FROM mod_types`
-	args := []any{}
+	var args []any
 	if gameTitleID > 0 {
 		query += ` WHERE gameTitleId = ?`
 		args = append(args, gameTitleID)
@@ -160,6 +163,7 @@ func (s *ModStore) Find(ctx context.Context, filter FindFilter, viewer Viewer) (
 	if err != nil {
 		return nil, fmt.Errorf("query mods: %w", err)
 	}
+	defer func() { _ = rows.Close() }()
 	// Materialise before any other query: with MaxOpenConns(1) a nested query
 	// inside the row loop would wait for the connection this loop holds.
 	scanned, total, err := scanModRows(rows)
@@ -407,28 +411,47 @@ func (s *ModStore) hydrate(ctx context.Context, scanned []modRow, viewer Viewer)
 		ids[i] = row.modID
 	}
 
-	images, err := s.imagesFor(ctx, ids)
-	if err != nil {
-		return nil, err
-	}
-	tags, err := s.tagsFor(ctx, ids)
-	if err != nil {
-		return nil, err
-	}
-	ratings, err := s.ratingsFor(ctx, ids)
-	if err != nil {
-		return nil, err
-	}
-	state, err := s.viewerStateFor(ctx, ids, viewer)
+	batch, err := s.loadBatch(ctx, ids, viewer)
 	if err != nil {
 		return nil, err
 	}
 
 	mods := make([]Mod, 0, len(scanned))
 	for _, row := range scanned {
-		mods = append(mods, row.toMod(state, ratings[row.modID], images[row.modID], tags[row.modID]))
+		mods = append(mods, row.toMod(batch.viewer, batch.ratings[row.modID], batch.images[row.modID], batch.tags[row.modID]))
 	}
 	return mods, nil
+}
+
+// modBatch is the per-page data of a set of mods: the images, tags, ratings
+// and viewer flags are resolved in one round of statements instead of four
+// queries per row.
+type modBatch struct {
+	images  map[int64][]Image
+	tags    map[int64][]ModTag
+	ratings map[int64]*Ratings
+	viewer  viewerState
+}
+
+// loadBatch resolves every per-page lookup of one set of ids.
+func (s *ModStore) loadBatch(ctx context.Context, ids []int64, viewer Viewer) (modBatch, error) {
+	images, err := s.imagesFor(ctx, ids)
+	if err != nil {
+		return modBatch{}, err
+	}
+	tags, err := s.tagsFor(ctx, ids)
+	if err != nil {
+		return modBatch{}, err
+	}
+	ratings, err := s.ratingsFor(ctx, ids)
+	if err != nil {
+		return modBatch{}, err
+	}
+	state, err := s.viewerStateFor(ctx, ids, viewer)
+	if err != nil {
+		return modBatch{}, err
+	}
+	return modBatch{images: images, tags: tags, ratings: ratings, viewer: state}, nil
 }
 
 func (s *ModStore) imagesFor(ctx context.Context, ids []int64) (map[int64][]Image, error) {
@@ -708,10 +731,10 @@ func (r modRow) toMod(state viewerState, ratings *Ratings, images []Image, tags 
 	}
 	if state.viewer.LoggedOn {
 		mod.IsOwner = r.creatorID.Valid && r.creatorID.Int64 == state.viewer.UserID
-		mod.UserLiked = boolPtr(state.liked[r.modID])
-		mod.UserDownloaded = boolPtr(state.downloaded[r.modID])
+		mod.UserLiked = new(state.liked[r.modID])
+		mod.UserDownloaded = new(state.downloaded[r.modID])
 		mod.UserInstalled = state.installed[r.modID]
-		mod.UserFlagged = boolPtr(state.flagged[r.modID])
+		mod.UserFlagged = new(state.flagged[r.modID])
 		if rating, ok := state.rating[r.modID]; ok {
 			mod.UserRating = &rating
 		}
@@ -775,10 +798,10 @@ func (r modRow) toDetail(state viewerState, ratings *Ratings, images []Image, ta
 	if state.viewer.LoggedOn {
 		owner := r.creatorID.Valid && r.creatorID.Int64 == state.viewer.UserID
 		detail.IsOwner = &owner
-		detail.UserLiked = boolPtr(state.liked[r.modID])
-		detail.UserDownloaded = boolPtr(state.downloaded[r.modID])
-		detail.UserInstalled = boolPtr(state.installed[r.modID])
-		detail.UserFlagged = boolPtr(state.flagged[r.modID])
+		detail.UserLiked = new(state.liked[r.modID])
+		detail.UserDownloaded = new(state.downloaded[r.modID])
+		detail.UserInstalled = new(state.installed[r.modID])
+		detail.UserFlagged = new(state.flagged[r.modID])
 		if rating, ok := state.rating[r.modID]; ok {
 			detail.UserRating = &rating
 		}
@@ -829,15 +852,19 @@ func applyTags(names *[]string, ids *[]int64, tagNames *[]string, tags []ModTag)
 	}
 }
 
-func boolPtr(value bool) *bool {
-	return &value
-}
-
 func rawJSON(value sql.NullString) json.RawMessage {
 	if !value.Valid || strings.TrimSpace(value.String) == "" {
 		return nil
 	}
 	return json.RawMessage(value.String)
+}
+
+// IsAbsoluteURL reports whether raw already names a scheme, which is how a
+// stored media name or file URL that points at a CDN is told apart from one
+// this server has to resolve against its own base.
+func IsAbsoluteURL(raw string) bool {
+	parsed, err := url.Parse(raw)
+	return err == nil && parsed.IsAbs()
 }
 
 // Detail returns one mod.
@@ -846,6 +873,7 @@ func (s *ModStore) Detail(ctx context.Context, modID int64, viewer Viewer) (*Det
 	if err != nil {
 		return nil, fmt.Errorf("query mod detail: %w", err)
 	}
+	defer func() { _ = rows.Close() }()
 	scanned, _, err := scanModRows(rows)
 	if err != nil {
 		return nil, err
@@ -854,24 +882,11 @@ func (s *ModStore) Detail(ctx context.Context, modID int64, viewer Viewer) (*Det
 		return nil, ErrNotFound
 	}
 	row := scanned[0]
-	ids := []int64{row.modID}
-	images, err := s.imagesFor(ctx, ids)
+	batch, err := s.loadBatch(ctx, []int64{row.modID}, viewer)
 	if err != nil {
 		return nil, err
 	}
-	tags, err := s.tagsFor(ctx, ids)
-	if err != nil {
-		return nil, err
-	}
-	ratings, err := s.ratingsFor(ctx, ids)
-	if err != nil {
-		return nil, err
-	}
-	state, err := s.viewerStateFor(ctx, ids, viewer)
-	if err != nil {
-		return nil, err
-	}
-	detail := row.toDetail(state, ratings[row.modID], images[row.modID], tags[row.modID])
+	detail := row.toDetail(batch.viewer, batch.ratings[row.modID], batch.images[row.modID], batch.tags[row.modID])
 	return &detail, nil
 }
 
@@ -901,6 +916,7 @@ func (s *ModStore) Related(ctx context.Context, modID int64, viewer Viewer) (*Mo
 	if err != nil {
 		return nil, fmt.Errorf("query related mods: %w", err)
 	}
+	defer func() { _ = rows.Close() }()
 	scanned, total, err := scanModRows(rows)
 	if err != nil {
 		return nil, err
@@ -912,6 +928,7 @@ func (s *ModStore) Related(ctx context.Context, modID int64, viewer Viewer) (*Mo
 		if err != nil {
 			return nil, fmt.Errorf("query related fallback: %w", err)
 		}
+		defer func() { _ = rows.Close() }()
 		scanned, total, err = scanModRows(rows)
 		if err != nil {
 			return nil, err
@@ -945,7 +962,7 @@ func (s *ModStore) Owns(ctx context.Context, modID int64, userID int64) (bool, e
 // CheckAndPublishFile commit - fileUrl, fileCRC, modFileSize and modDiskSize
 // equal (the capture block commits 1509669 in both) - and lastUpdate moves to
 // the commit time, which the Detail capture shows sharing the commit second.
-func (s *ModStore) AttachFile(ctx context.Context, modID int64, url string, crc string, size float64, diskSize float64) error {
+func (s *ModStore) AttachFile(ctx context.Context, modID int64, url string, crc string, size float64) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin attach: %w", err)
@@ -1633,8 +1650,7 @@ func (s *ModStore) Publish(ctx context.Context, input PublishInput) (int64, erro
 		// with a fresh upload carries the stored CRC name and renews the set.
 		fresh := false
 		for _, image := range input.Images {
-			if image.ImageName != "" && !strings.HasPrefix(image.ImageName, "http://") &&
-				!strings.HasPrefix(image.ImageName, "https://") {
+			if image.ImageName != "" && !IsAbsoluteURL(image.ImageName) {
 				fresh = true
 				break
 			}

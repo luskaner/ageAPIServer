@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package v4
 
 import (
@@ -37,16 +39,11 @@ func Detail(deps shared.Deps) http.HandlerFunc {
 			detail.ModVersion = 1.1
 		}
 		if detail.VerifiedVersion == nil {
-			detail.VerifiedVersion = ptr("")
+			detail.VerifiedVersion = new("")
 		}
 		if detail.ModStatusMessage == nil {
-			detail.ModStatusMessage = ptr("")
+			detail.ModStatusMessage = new("")
 		}
 		shared.WriteJSON(w, http.StatusOK, detail)
 	}
-}
-
-// ptr is a shorthand string pointer for the fixed defaults of the capture.
-func ptr(value string) *string {
-	return &value
 }

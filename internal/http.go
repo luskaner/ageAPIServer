@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package internal
 
 import (
@@ -52,12 +54,6 @@ func JSON(w http.ResponseWriter, data any) {
 	}
 	writeJSONHeader(w)
 	_, _ = w.Write(encoded)
-}
-
-// RawJSON writes an already encoded JSON document.
-func RawJSON(w http.ResponseWriter, data []byte) {
-	writeJSONHeader(w)
-	_, _ = w.Write(data)
 }
 
 // Bind decodes the request into data: the JSON body for POST, the query string
@@ -145,6 +141,8 @@ func setField(field reflect.Value, raw string) error {
 			return err
 		}
 		field.SetFloat(value)
+	default:
+		// Unsupported kinds keep their zero value.
 	}
 	return nil
 }

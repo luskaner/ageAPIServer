@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package router
 
 import (
@@ -13,6 +15,10 @@ type CORSConfig struct {
 	AllowedOrigins   []string
 	AllowCredentials bool
 	MaxAge           time.Duration
+	// AllowedMethods is what Access-Control-Allow-Methods answers. Empty keeps
+	// the historical "GET, POST, OPTIONS" so a host application building its
+	// own chain sees no change.
+	AllowedMethods []string
 }
 
 // CORS answers the preflight before the mux and adds the headers to the real
@@ -24,6 +30,10 @@ func CORS(cfg CORSConfig) Middleware {
 		allowed[strings.ToLower(strings.TrimSpace(origin))] = true
 	}
 	maxAge := strconv.Itoa(int(cfg.MaxAge.Seconds()))
+	methods := "GET, POST, OPTIONS"
+	if len(cfg.AllowedMethods) > 0 {
+		methods = strings.Join(cfg.AllowedMethods, ", ")
+	}
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -35,7 +45,7 @@ func CORS(cfg CORSConfig) Middleware {
 				if cfg.AllowCredentials {
 					w.Header().Set("Access-Control-Allow-Credentials", "true")
 				}
-				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+				w.Header().Set("Access-Control-Allow-Methods", methods)
 				w.Header().Set("Access-Control-Allow-Headers", "content-type, authorization")
 				w.Header().Set("Access-Control-Max-Age", maxAge)
 			}

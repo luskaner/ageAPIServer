@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package router
 
 import (
@@ -11,8 +13,15 @@ import (
 // truncate it before the handler could accept it: MatchContent streams the body
 // to disk and applies its own [MatchContent] MaxFileSize. The CheckAndPublishFile
 // blocks carry a whole mod archive the same way (the capture block is 1.5 MB)
-// and stream to disk under the handler's own block limit.
-var exemptBodySizePrefixes = []string{"/api/matchcontent", "/api/v4/mods/checkandpublishfile"}
+// and stream to disk under the handler's own block limit. Publish and the legacy
+// Create carry the archive in their multipart body and stream it to disk under
+// [Storage] MaxModFileBytes, so the global cap cannot apply to them either.
+var exemptBodySizePrefixes = []string{
+	"/api/matchcontent",
+	"/api/v4/mods/checkandpublishfile",
+	"/api/v4/mods/publish",
+	"/api/v1/mods/create",
+}
 
 // exemptBodySizePath matches against the cleaned path. The chain runs after
 // Normalize, but a direct use of the middleware may see the raw form, and a

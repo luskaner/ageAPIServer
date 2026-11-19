@@ -1,9 +1,10 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package models
 
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"math"
 )
@@ -152,6 +153,3 @@ func (s *RatingStore) AddReview(ctx context.Context, review Review, modID int64)
 	}
 	return nil
 }
-
-// ErrNoRating reports that the user has not rated the mod.
-var ErrNoRating = errors.New("no rating")

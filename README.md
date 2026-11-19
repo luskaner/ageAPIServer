@@ -1,12 +1,14 @@
 # ageAPIServer
 
-Go implementation of the **Age of Empires Mods API v3.2.0** (`api_spec.yml`)
+Go implementation of the **Age of Empires API v3.2.0** (`api_spec.yml`)
 backed by SQLite. It runs as a standalone binary and mounts as one more route in
 any existing `net/http` application.
 
 - Module: `github.com/luskaner/ageAPIServer`
 - Go: 1.27
 - Storage: SQLite via `modernc.org/sqlite` (pure Go, no cgo)
+- Transport: plain HTTP, TLS terminated in-process, or HTTPS offloaded to a
+  proxy (`[Server.TLS] Mode`)
 
 ## Build and run
 
@@ -23,12 +25,51 @@ AGEAPISERVER_SERVER_ADDR=:9000 AGEAPISERVER_DB_PATH=/var/lib/mods.db ./ageAPISer
 ./ageAPIServer --server.addr=:9000 --log.level=debug
 ```
 
+Docker images and compose files live in the ageLANServer-style tree
+`tools/server-docker/` (multi-stage `golang:1.27-alpine3.24` → `upx` →
+`alpine:3.24`):
+
+```bash
+docker compose -f tools/server-docker/Compose/server.bridge.yml up --build
+```
+
+`tools/server-docker/README.md` documents the bridge, host and nginx variants,
+the volumes and the environment variables.
+
 The spec has no login endpoint, so an operator obtains a website session cookie
 with:
 
 ```bash
 ./ageAPIServer --new-session '<steam-token>'
 ```
+
+## HTTPS
+
+`[Server.TLS] Mode` picks the deployment. The game clients speak plain HTTP, so
+the default is `off`; the other two are for a host that is reached over TLS:
+
+| `Mode` | This listener | Absolute URLs (`downloadUrl`, `imageThumbnail`, `filePath`) |
+|---|---|---|
+| `off` (default) | plain HTTP | follow the request, `X-Forwarded-Proto`/`-Host` aware |
+| `on` | TLS, terminated here | `https` |
+| `proxy` | plain HTTP, terminated by a proxy | `https` unless `X-Forwarded-Proto` says otherwise |
+
+`on` keeps the conventional layout: the pair is looked up as `cert.pem` and
+`key.pem` inside `resources/certificates` next to the binary (created on first
+use), and `[Server.TLS] Folder`, `Cert` and `Key` override that. The project does
+not generate certificates - bring the pair, either issued by a CA or any
+self-signed one your clients trust:
+
+```bash
+./ageAPIServer --server.addr=:443 --server.tls.mode=on
+```
+
+Behind an external terminator (nginx, Caddy, a cloud load balancer) keep the
+HTTP listener and set `proxy`. It is `off` plus one statement: a request that
+arrives without TLS and without `X-Forwarded-Proto` still answers `https` links,
+so a proxy that forwards only the host does not hand the client an http
+download. `Server.PublicBaseURL` still pins the whole base when the deployment
+has a canonical one.
 
 ## Use as a library
 
@@ -59,17 +100,21 @@ trailing slash is optional, because the clients disagree: AOE2 sends
 `/api/v4/mods/...`, AOE3 and AOE4 send `/api/v4/Mods/...`, AOM sends both in the
 same session, and the website sends `/api/v4/mods/UnSubscribe/...`.
 
+`GET /openapi.yml` serves the embedded `api_spec.yml` (it is the file shipped in
+the releases, byte for byte), so a client generator can read the contract
+without unpacking the archive.
+
 | Group | Endpoints | Auth |
 |---|---|---|
-| v4 read-only | `Games`, `Tags`, `Featured`, `Find`, `Detail`, `Related`, `Reviews` | anonymous |
+| v4 read-only | `Games`, `Tags`, `Featured`, `Find`, `Detail`, `Related`, `Reviews` | required |
 | v4 user | `Installed`, `My`, `Subscribe`, `Unsubscribe`, `Rate`, `Download`, `Download .../file` | required |
 | v4 write | `Publish`, `CheckAndPublishFile`, `Delete`, `Report` | required |
 | v1 legacy | `Detail`, `FindAsUser`, `Installed`, `My`, `Flag`, `Install`, `Uninstall`, `Create`, `Delete` | required |
 | Polls | `/Poll/list`, `/Poll/{pollId}` | required |
 | Moderation | `/textmoderation` | required |
-| MatchContent | `/api/MatchContent/`, `/{matchId}` and `/{matchId}/file/{hash}` (outside the spec) | anonymous |
-| Media | `/api/v4/mods/image/{name}` (outside the spec) | anonymous |
-| Ops | `/healthz` (outside the spec) | anonymous |
+| MatchContent | `/api/MatchContent/`, `/{matchId}` and `/{matchId}/file/{hash}` | anonymous |
+| Media | `/api/v4/mods/image/{name}` | anonymous |
+| Ops | `/healthz`, `/openapi.yml` | anonymous |
 
 Authentication is `Authorization: Steam1.0 <token>`, `Authorization: XBL3.0
 x=<puid>;<token>` or the `.AgeOfEmpiresServices` cookie. The AOE3 capture
@@ -237,6 +282,133 @@ id; do not expose this to the internet without a real check.
 - **Report** stores the concern in `mod_reports` and answers the bare `true`.
   Every field is a string in the capture, including `modId`, unlike `Delete`.
 
+## Operation
+
+### Resource bases
+
+Two bases, deliberately - it is the layout of the ageLANServer family:
+
+| Resolved against the working directory | Resolved against the executable's folder |
+|---|---|
+| `resources/config/config.toml` | `resources/certificates/cert.pem` |
+| `ageAPIServer.log` (and its `.old` generation) | `resources/certificates/key.pem` |
+| `ageAPIServer.db` (plus `-wal`/`-shm`) | |
+| `uploads/` (archives, screenshots, block staging) | |
+| the MatchContent folder when it is not `auto` | |
+
+`[MatchContent] Folder = "auto"` is `<os.TempDir()>/ageAPIServer/custom-files`, so
+a savegame store that has to survive a reboot must name a folder.
+`[Storage] UploadDir` and `[Server.TLS] Folder` override their defaults. Run the
+binary from (or set `WorkingDirectory` to) the directory that should own the
+database and the uploads.
+
+### Behind a reverse proxy
+
+Keep the listener on loopback or a private network and let the proxy be the only
+public entry point. Three body limits are mandatory, because nginx defaults to
+1 MiB while the uploads are measured in megabytes and gigabytes:
+
+```nginx
+# AOE4 block upload: one 512 MiB block per request.
+location /api/v4/mods/checkandpublishfile {
+    client_max_body_size 512m;
+    proxy_request_buffering off;
+    proxy_read_timeout 600s;
+    proxy_send_timeout 600s;
+    proxy_pass http://127.0.0.1:8080;
+}
+
+# Publish (v4) and Create (v1): a .zip of up to 1 GiB plus multipart framing.
+location ~* ^/api/(v4/mods/publish|v1/mods/create)/?$ {
+    client_max_body_size 1100m;
+    proxy_request_buffering off;
+    proxy_read_timeout 600s;
+    proxy_send_timeout 600s;
+    proxy_pass http://127.0.0.1:8080;
+}
+
+# MatchContent savegames and replays: 32 MiB plus slack.
+location /api/matchcontent {
+    client_max_body_size 36m;
+    proxy_request_buffering off;
+    proxy_read_timeout 300s;
+    proxy_send_timeout 300s;
+    proxy_pass http://127.0.0.1:8080;
+}
+```
+
+`docs/nginx-ageapiserver.conf` is the same file for a bare-metal proxy, and
+`tools/server-docker/Compose/server.proxy.bridge.yml` wires the containerized
+equivalent in front of the server. The high read/send timeouts are for the same
+bodies: a slow 1 GiB upload must not be cut at 60 s.
+
+`X-Forwarded-Proto`, `-Host` and `-For` are trusted unconditionally. They only
+build the absolute URLs of the response, so they are not an authentication
+bypass by themselves - but any client can set them when it talks to the server
+directly. A trusted-proxy allowlist is future work (see `SECURITY.md`).
+
+### Web upload vs game upload
+
+The two upload surfaces have different contracts, and only `Publish` /
+`Create` distinguish them by the credential that resolved the request:
+
+| | Website (`.AgeOfEmpiresServices` cookie) | Game clients (`Steam1.0` / `XBL3.0`) |
+|---|---|---|
+| `modName` | required | required |
+| `description` | required | optional |
+| screenshots | 1 to 5, closed list of formats | optional, any number |
+| tags | at most 7 | no limit |
+| archive | `.zip`, up to `[Storage] MaxModFileBytes` (1 GiB) | any extension; AOE4 sends its `.sga` in blocks through `CheckAndPublishFile` |
+| body cap | exempt from `Server.MaxBodyBytes`; streamed under `MaxModFileBytes` | same |
+
+The website rules live in `ValidateWebPublish` and are applied to a cookie
+publish only. The game path stays exactly as the captures encode it - no image
+minimum, no archive extension rule - because a new game client with another
+format must not be broken by a form the website happens to enforce. Oversized
+files answer 400 before anything is stored: the limit is applied to the bytes
+streamed to disk, not to the client-supplied multipart size header.
+
+### Log rotation
+
+`[Log] MaxSizeBytes` is a startup check, not a watcher: when the file is already
+bigger than the limit it is renamed to `<File>.old` (one generation) and a new
+file is opened. `0` disables it.
+
+For anything richer, leave the key at `0` and rotate externally:
+
+```
+# /etc/logrotate.d/ageAPIServer
+/var/lib/ageAPIServer/ageAPIServer.log {
+    daily
+    rotate 14
+    compress
+    missingok
+    notifempty
+    copytruncate
+}
+```
+
+On Windows, a scheduled task can rename the file and restart the service, or
+use any log-shipping agent; the server does not need to be told.
+
+### Removing leftover uploads
+
+`--gc-uploads` compares `[Storage] UploadDir` with the database and reports the
+files nothing references; `--gc-apply` deletes exactly what was reported. Run it
+with the server stopped:
+
+```bash
+./ageAPIServer --gc-uploads            # dry run, report only
+./ageAPIServer --gc-uploads --gc-apply # delete what was reported
+```
+
+A stale `upload-*` temporary is collected only when it is more than an hour old,
+so a publish in flight is never touched. `blocks/<modId>` of a mod that does not
+exist is collected whole, and the MatchContent folder is left alone because that
+store expires its own files. The GC never deletes by reference count: stored
+names are the CRC32 of the content, and two mods can share one file, so a name
+survives while any row still points at it.
+
 ## Layout
 
 ```
@@ -262,118 +434,19 @@ The `internal/routes` tree mirrors the URL: `/api/v4/mods/Games` is served by
 `internal/routes/api/mods/v4/games.go`. `router` and `shared` are the only
 exceptions, because they are infrastructure rather than endpoints.
 
-## Deviations from the implementation plan
-
-1. **Binary location.** The plan puts `main.go` and `api.go` in the repository
-   root, which Go rejects: one directory is one package. The root is the library
-   package `ageAPIServer` and the binary lives in `cmd/ageAPIServer`, so
-   `go build ./cmd/ageAPIServer` produces it.
-2. **`subscriptions.downloadCounted`.** The plan's counter rule (increment only
-   when `downloadedAt` was NULL) never counts, because `Subscribe` already sets
-   `downloadedAt`. A dedicated flag keeps the plan's intent: the pair counts
-   once.
-3. **`reviews.reviewerId` stays a string** as the spec declares, so `userReview`
-   is resolved through the viewer's Steam id. A cookie-only session has no
-   Steam id and therefore no `userReview`.
-4. **Tag catalog.** `mod_types` is seeded with the exact body of a live
-   `GET /api/v4/mods/Tags`: 56 rows over 22 distinct `modTypeId` values. The id
-   is global, not per game, so the same id carries different names in different
-   titles (1 is "Single-player scenarios" in game 1 and "Crafted Map" in game
-   4). The table is therefore keyed on `(gameTitleId, modTypeId)`, and
-   `mod_tag_map` references that pair. `mods.modTypeId` does not: the live
-   Create accepted a `ModType` the Tags catalog does not sell, so the column
-   is a join hint, not a foreign key. `testdata/tags.json` holds the
-   upstream body and the test compares against it byte for byte.
-5. **`modStatusId` mapping**: the created mod of the AOE2 captures answers
-   `2`/`Published` for an Unlisted visibility, and every live detail shows the
-   same pair, so `Published` is 2. The other three names guess the remaining
-   slots and remain a constant that a capture can correct without a
-   migration.
-
-## Upstream drift between the August and November captures
-
-The captures in the `api_web` log folder come from two sessions, 2026-08-09 and
-2026-11-11. Comparing them field by field shows that the service changed the
-`ratings` block in between, and the November shape is the one this server
-implements:
-
-| Field | August | November |
-|---|---|---|
-| `ratings.leastFavorableReview` | object or null | gone |
-| `ratings.mostFavorableReview` | object or null | gone |
-| `ratings.rating.count1Star`..`count5Star` | integer or null | gone |
-| `ratings.rating.average`, `totalCount` | present | present |
-| `modList[].metaData` | the whole mod nested | null |
-
-Everything else is identical: the 52 keys of a mod entry, the `searchParams`
-echo and the `errorCode`/`errorMessage` pair. Three details of the November
-captures are easy to miss and are pinned by tests:
-
-- `ratings` is always an object, even for a mod with no ratings, where it is
-  `{"rating":{"average":0,"totalCount":0},"reviewsCount":0}`.
-- Every list response carries `errorCode: -1` and `errorMessage: ""`, including
-  the ones that return data.
-- `Reviews` answers `totalCount: null` when the mod has no reviews, and `Rate`
-  answers `statusCode: null` and `responseMessage: null`.
-
-`Related` is a fixed page: `start` 0, `count` 6, `modid` as a string and a
-`totalCount` equal to the size of that page, unlike `Find`, which echoes the
-request it received. The AOE2 captures of a deleted mod add two answers this
-server honours: the `Related` of a missing mod is `204 No Content` instead of
-an error body, and the v4 `Detail` of one
-is the RFC 9110 `ProblemDetails` of the web server.
-
-Two deviations are deliberate. `isLoggedOn` reports the real session on the v4
-list endpoints, where the August/November captures say `false` even for `My`
-and `Installed` called with a valid cookie; reporting the truth is a superset
-of that — and the AOE2 v1 captures agree, their lists say `true`. And the
-`createDate` of a seeded mod keeps the value it was seeded with, which may be
-RFC 3339; a mod this server publishes is stamped with the capture format
-(`2026-11-18T22:07:21.043`), the millisecond instant without the zone marker.
-
-## The AOE2 captures
-
-The `api_aoe2` folder captures the AOE2 client and the website against the
-live service (2026-11-11 and 2026-11-18) and pins what was missing from the
-web captures: the legacy `Create`, the legacy `Delete`, the legacy row shape
-of the lists and of `Detail` (sparse wrapper around the `metaData` snapshot),
-and the answers for a missing or deleted mod. `TestCreateMatchesTheLegacyCapture`
-walks the whole lifecycle — create, detail lookup from both versions, install,
-my list, delete and the two post-delete answers — and asserts each one against
-the captured bytes.
-
-## Database compatibility
-
-`schemaVersion` is 5. `Migrate` only creates missing objects, so a database
-created with the previous single-column `mod_types` key is not upgraded: the
-seed detects the partial catalog and refuses to start, asking for the file to be
-deleted. Version 4 also drops the `mods.modTypeId` foreign key, which an older
-database keeps; it only constrains the columns a fresh database creates without.
-Version 5 adds the `mod_id_allocator` of the locally published id band. There is
-no data to preserve in a fresh deployment.
-
-## Open question: anonymous read-only endpoints
-
-`api_spec.yml` declares `security: []` on Games, Tags, Featured, Find, Detail,
-Related and Reviews, and this server honours that. A live probe of
-`api.ageofempires.com` answered `401` with `errorCode 900` on all of them except
-Games and Tags.
-
-The evidence is not conclusive. The two endpoints that still answer are exactly
-the two static, cacheable GETs, so a CDN serving them from cache while the
-origin rejects anonymous traffic explains the split without any policy change.
-The probe also reported an empty body for `Detail`, which contradicts the JSON
-error it got everywhere else, and it never ran a control request with a valid
-credential.
-
-The default therefore stays spec-compliant. Set `Auth.RequireForReadOnly` (or
-`AGEAPISERVER_AUTH_REQUIREFORREADONLY=true`) to make those seven endpoints
-reject anonymous requests if the finding is confirmed.
-
 ## Tests
 
 ```bash
 go test -race ./...
+```
+
+Coverage is measured across packages (`-coverpkg=./...`), because the handlers
+are exercised through the root HTTP suite rather than a package-local test:
+without the flag those packages would report 0% while being fully exercised.
+
+```bash
+go test -coverpkg=./... ./... -coverprofile cover.out
+go tool cover -func cover.out | tail -1
 ```
 
 Coverage includes path normalization, CORS preflight, credential redaction,
@@ -385,3 +458,9 @@ multipart parsing and upload storage of `Publish`, the creator-only rules of
 The three write handlers and their helpers are at 100% statement coverage. The
 global figure is lower because the read-only handlers are exercised through the
 HTTP layer while their store helpers keep unreachable error branches.
+
+## License
+
+ageAPIServer is released under the **GNU Affero General Public License v3.0
+only** (AGPL-3.0-only). The full text is in `LICENSE`; every source file carries
+its SPDX identifier.

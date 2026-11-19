@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package shared
 
 import (
@@ -14,10 +16,11 @@ import (
 // Error codes of the ErrorResponse body. They are not HTTP statuses: the
 // upstream answers 401 with errorCode 900.
 const (
-	CodeBadRequest   = 400
-	CodeUnauthorized = 900
-	CodeNotFound     = 404
-	CodeInternal     = 500
+	CodeBadRequest      = 400
+	CodeUnauthorized    = 900
+	CodeNotFound        = 404
+	CodeTooManyRequests = 429
+	CodeInternal        = 500
 )
 
 // UnauthorizedMessage is the body message of a 401, as observed upstream.

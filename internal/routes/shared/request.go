@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package shared
 
 import (
@@ -170,8 +172,6 @@ func (r FindRequestV1) ToFilter(p Pagination, d FilterDefaults) models.FindFilte
 	}
 }
 
-// SearchParams echoes the request. `status` and `tags` are not part of the
-// schema, so they cannot be echoed; `modid` keeps the shape the client used.
 // WithEchoDefaults returns a copy of the request with the endpoint defaults
 // filled in. The searchParams echo of every list endpoint shows the resolved
 // values, not the raw body: the AOE3 My answers creator=caller and count 10,
@@ -209,6 +209,8 @@ func modIDEcho(raw FlexInt, unset json.RawMessage) json.RawMessage {
 	return json.RawMessage(strconv.Quote(strconv.FormatInt(raw.Value, 10)))
 }
 
+// SearchParams echoes the request. `status` and `tags` are not part of the
+// schema, so they cannot be echoed; `modid` keeps the shape the client used.
 func (r FindRequest) SearchParams() SearchParams {
 	params := SearchParams{
 		Q:      stringPtr(r.Q),

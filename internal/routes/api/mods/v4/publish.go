@@ -1,6 +1,9 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package v4
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 
@@ -35,6 +38,17 @@ func Publish(deps shared.Deps) http.HandlerFunc {
 		}
 
 		viewer := router.ViewerFrom(r)
+		// The website form is the strict one: description, 1-5 screenshots from
+		// a closed list of formats, at most 7 tags and a .zip archive. The game
+		// clients keep the permissive contract the captures encode (a .sga with
+		// no images at all for AOE4), so the rules only apply to a cookie.
+		if viewer.Scheme == models.SchemeCookie {
+			if err := shared.ValidateWebPublish(form); err != nil {
+				shared.WriteError(w, http.StatusBadRequest, shared.CodeBadRequest, err.Error())
+				return
+			}
+		}
+
 		input := models.PublishInput{
 			ModID:         form.ModID,
 			GameTitleID:   form.GameTitleID,
@@ -49,8 +63,12 @@ func Publish(deps shared.Deps) http.HandlerFunc {
 		}
 
 		if form.File != nil {
-			saved, err := shared.SaveUpload(deps.UploadDir, form.File)
+			saved, err := shared.SaveUpload(deps.UploadDir, form.File, deps.MaxModFileBytes)
 			if err != nil {
+				if errors.Is(err, models.ErrFileTooLarge) {
+					shared.WriteError(w, http.StatusBadRequest, shared.CodeBadRequest, "mod file is too large")
+					return
+				}
 				shared.WriteError(w, http.StatusInternalServerError, shared.CodeInternal, err.Error())
 				return
 			}
@@ -63,8 +81,12 @@ func Publish(deps shared.Deps) http.HandlerFunc {
 			input.DiskSize = shared.DiskSize(form.File)
 		}
 
-		images, err := shared.PublishImages(deps.UploadDir, form)
+		images, err := shared.PublishImages(deps.UploadDir, form, deps.MaxModFileBytes)
 		if err != nil {
+			if errors.Is(err, models.ErrFileTooLarge) {
+				shared.WriteError(w, http.StatusBadRequest, shared.CodeBadRequest, "image is too large")
+				return
+			}
 			shared.WriteError(w, http.StatusInternalServerError, shared.CodeInternal, err.Error())
 			return
 		}

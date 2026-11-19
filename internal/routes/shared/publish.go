@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package shared
 
 import (
@@ -275,8 +277,9 @@ func DiskSize(header *multipart.FileHeader) float64 {
 // PublishImages stores the uploaded screenshots and pairs them with their
 // metadata. An entry without a matching upload keeps the thumbnail the client
 // sent, which is how an update reuses an image that already exists, and falls
-// back to the declared size.
-func PublishImages(dir string, form PublishForm) ([]models.PublishImage, error) {
+// back to the declared size. max caps each file as it is streamed, like
+// SaveUpload.
+func PublishImages(dir string, form PublishForm, max int64) ([]models.PublishImage, error) {
 	if len(form.ImageMeta) == 0 {
 		return nil, nil
 	}
@@ -294,7 +297,7 @@ func PublishImages(dir string, form PublishForm) ([]models.PublishImage, error) 
 			FileSize:     meta.FileSize,
 		}
 		if header, ok := uploads[meta.ImageName]; ok {
-			saved, err := SaveUpload(dir, header)
+			saved, err := SaveUpload(dir, header, max)
 			if err != nil {
 				return nil, err
 			}
@@ -327,6 +330,73 @@ func (f PublishForm) Validate() error {
 	return nil
 }
 
+// webImageExtensions is the list the official website file picker accepts,
+// verbatim from its banner.
+var webImageExtensions = map[string]bool{
+	"apng": true, "avif": true, "bmp": true, "gif": true, "heic": true,
+	"heif": true, "ico": true, "jpe": true, "jpeg": true, "jpg": true,
+	"jxl": true, "pjpeg": true, "pjp": true, "png": true, "svg": true,
+	"svgz": true, "tif": true, "tiff": true, "webp": true, "xbm": true,
+}
+
+// extensionOf is the lowercase extension of a client filename without the dot.
+func extensionOf(name string) string {
+	return strings.TrimPrefix(strings.ToLower(filepath.Ext(name)), ".")
+}
+
+// ValidateWebPublish applies the rules of the official website upload form,
+// which only a cookie-authenticated publish sees: a required description, one
+// to five screenshots from the picker's closed list of formats, at most seven
+// tags and a .zip archive. The ticket path keeps the permissive contract the
+// captures encode (AOE4 sends a .sga and no images), so this is never called
+// from there.
+func ValidateWebPublish(form PublishForm) error {
+	if strings.TrimSpace(form.Description) == "" {
+		return errors.New("description is required")
+	}
+	uploads := make(map[string]bool, len(form.Images))
+	for _, header := range form.Images {
+		uploads[header.Filename] = true
+	}
+	paired := 0
+	for _, meta := range form.ImageMeta {
+		if !uploads[meta.ImageName] {
+			continue
+		}
+		if !webImageExtensions[extensionOf(meta.ImageName)] {
+			return errors.New("unsupported image format")
+		}
+		paired++
+	}
+	if paired < 1 || paired > 5 || len(form.ImageMeta) > 5 {
+		return errors.New("between 1 and 5 images are required")
+	}
+	if len(form.TagIDs) > 7 {
+		return errors.New("at most 7 tags are allowed")
+	}
+	if form.File != nil && extensionOf(form.File.Filename) != "zip" {
+		return errors.New("mod file must be a .zip")
+	}
+	return nil
+}
+
+// limitedWriter fails as soon as a write would push the total past limit. A
+// non-positive limit means no limit, the same convention as
+// models.CustomFilesStore. The multipart size header is client supplied, so the
+// upload cap is applied to the bytes actually streamed.
+type limitedWriter struct {
+	limit int64
+	n     int64
+}
+
+func (lw *limitedWriter) Write(p []byte) (int, error) {
+	if lw.limit > 0 && lw.n+int64(len(p)) > lw.limit {
+		return 0, models.ErrFileTooLarge
+	}
+	lw.n += int64(len(p))
+	return len(p), nil
+}
+
 // SavedFile is the result of storing an uploaded file.
 type SavedFile struct {
 	// Path is the location relative to the upload directory.
@@ -335,10 +405,25 @@ type SavedFile struct {
 	CRC  string
 }
 
+// newUploadTemp creates dir when it is missing and opens the temporary file
+// that SaveUpload and SaveStagedBlocks rename into place once its bytes are
+// stored. The caller removes the returned name when it bails out.
+func newUploadTemp(dir string) (*os.File, string, error) {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, "", fmt.Errorf("create upload dir: %w", err)
+	}
+	temp, err := os.CreateTemp(dir, "upload-*")
+	if err != nil {
+		return nil, "", fmt.Errorf("create upload: %w", err)
+	}
+	return temp, temp.Name(), nil
+}
+
 // SaveUpload stores an uploaded file under dir and returns its relative path,
 // size and CRC32. The stored name is the content hash, so uploading the same
-// bytes twice does not duplicate the file.
-func SaveUpload(dir string, header *multipart.FileHeader) (SavedFile, error) {
+// bytes twice does not duplicate the file. max caps the bytes streamed to disk:
+// a non-positive value means no limit, never "reject everything".
+func SaveUpload(dir string, header *multipart.FileHeader, max int64) (SavedFile, error) {
 	if dir == "" {
 		return SavedFile{}, errors.New("no upload directory configured")
 	}
@@ -348,18 +433,21 @@ func SaveUpload(dir string, header *multipart.FileHeader) (SavedFile, error) {
 	}
 	defer func() { _ = source.Close() }()
 
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return SavedFile{}, fmt.Errorf("create upload dir: %w", err)
-	}
-	temp, err := os.CreateTemp(dir, "upload-*")
+	temp, tempName, err := newUploadTemp(dir)
 	if err != nil {
-		return SavedFile{}, fmt.Errorf("create upload: %w", err)
+		return SavedFile{}, err
 	}
-	tempName := temp.Name()
 	defer func() { _ = os.Remove(tempName) }()
 
 	hash := crc32.NewIEEE()
-	written, err := io.Copy(io.MultiWriter(temp, hash), source)
+	sink := io.MultiWriter(temp, hash)
+	if max > 0 {
+		// The multipart size header is client supplied, so the cap applies to
+		// the bytes actually copied. The limiter goes first so an oversized
+		// file never reaches the temporary file.
+		sink = io.MultiWriter(&limitedWriter{limit: max}, temp, hash)
+	}
+	written, err := io.Copy(sink, source)
 	if err != nil {
 		_ = temp.Close()
 		return SavedFile{}, fmt.Errorf("write upload: %w", err)
@@ -435,14 +523,10 @@ func SaveStagedBlocks(dir string, parts []string) (SavedFile, error) {
 	if dir == "" {
 		return SavedFile{}, errors.New("no upload directory configured")
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return SavedFile{}, fmt.Errorf("create upload dir: %w", err)
-	}
-	temp, err := os.CreateTemp(dir, "upload-*")
+	temp, tempName, err := newUploadTemp(dir)
 	if err != nil {
-		return SavedFile{}, fmt.Errorf("create upload: %w", err)
+		return SavedFile{}, err
 	}
-	tempName := temp.Name()
 	defer func() { _ = os.Remove(tempName) }()
 
 	hash := crc32.NewIEEE()
@@ -490,7 +574,7 @@ func ParseBlockList(body []byte) []string {
 		ids = append(ids, string(match[1]))
 	}
 	if len(ids) == 0 {
-		for _, line := range strings.Split(string(body), "\n") {
+		for line := range strings.SplitSeq(string(body), "\n") {
 			line = strings.TrimSuffix(strings.TrimSpace(line), "\r")
 			if line != "" {
 				ids = append(ids, line)
@@ -540,7 +624,7 @@ func tagFields(r *http.Request) ([]int64, error) {
 			continue
 		}
 		for _, raw := range keyValues {
-			for _, piece := range strings.Split(raw, ",") {
+			for piece := range strings.SplitSeq(raw, ",") {
 				piece = strings.TrimSpace(piece)
 				if piece == "" {
 					continue

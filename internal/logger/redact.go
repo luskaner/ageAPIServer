@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package logger
 
 import (
@@ -41,11 +43,6 @@ func RedactHeaders(header http.Header) map[string]string {
 		redacted[name] = RedactHeader(name, strings.Join(values, ", "))
 	}
 	return redacted
-}
-
-// RedactAuthorization is RedactHeader specialised for the Steam token header.
-func RedactAuthorization(value string) string {
-	return RedactHeader("Authorization", value)
 }
 
 // RedactCookie is RedactHeader specialised for the session cookie header. It
