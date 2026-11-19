@@ -42,6 +42,10 @@ jobs:
         shell: bash
         run: cd tools/scripts && go run ./cmd/generateGoreleaserConfig.go "${{ steps.setup_go_legacy.outputs.goroot }}"
 
+      - name: Debug release config
+        shell: bash
+        run: cat .goreleaser.yaml && ls -la cmd cmd/ageAPIServer && git status --porcelain
+
       - name: Import release signing key
         shell: bash
         env:
