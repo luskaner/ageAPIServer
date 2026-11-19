@@ -464,3 +464,8 @@ HTTP layer while their store helpers keep unreachable error branches.
 ageAPIServer is released under the **GNU Affero General Public License v3.0
 only** (AGPL-3.0-only). The full text is in `LICENSE`; every source file carries
 its SPDX identifier.
+
+## Disclaimer
+
+**Disclaimer: This software is not affiliated or endorsed by any publisher or
+developer of the games.**
