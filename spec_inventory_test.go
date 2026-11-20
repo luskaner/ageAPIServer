@@ -22,7 +22,7 @@ func normalizeSpecPath(path string) string {
 
 // inventoryOnly would hold routes the server registers but the spec does not
 // document. It is empty and meant to stay that way: even the local Ops
-// endpoints (/healthz, /openapi.yml) are in api_spec.yml as implementation
+// endpoints (/test, /cacert.pem, /openapi.yml) are in api_spec.yml as implementation
 // endpoints, so the bidirectional check below covers every route.
 var inventoryOnly = map[string]bool{}
 

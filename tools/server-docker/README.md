@@ -58,7 +58,7 @@ Add more with `environment:` in an include file or with
 
 | Port    | Protocol | Service | Description                    |
 |---------|----------|---------|--------------------------------|
-| `8080`  | TCP      | server  | API (`/healthz`, `/openapi.yml`, mods, MatchContent) |
+| `8080`  | TCP      | server  | API (`/test`, `/cacert.pem`, `/openapi.yml`, mods, MatchContent) |
 | `80`    | TCP      | nginx   | Only in `server.proxy.bridge.yml` |
 
 ### Volumes

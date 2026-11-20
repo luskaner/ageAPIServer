@@ -68,6 +68,10 @@ type Config struct {
 	// MaxModFileBytes caps each archive or screenshot Publish streams to
 	// UploadDir. Zero means no limit.
 	MaxModFileBytes int64
+	// TLSCert is the certificate the listener terminates TLS with. When it is
+	// set, /cacert.pem serves it; an empty value means this process does not
+	// terminate TLS itself (mode off or proxy) and the route answers 404.
+	TLSCert string
 	// MatchContent is the disk store behind the /api/MatchContent endpoints.
 	// The zero value leaves them answering 404.
 	MatchContent MatchContentConfig
@@ -209,7 +213,8 @@ func New(cfg Config) (*Server, error) {
 	textmoderation.Register(group, deps)
 	matchcontent.Register(group, deps)
 	group.HandleFunc("GET", "/openapi.yml", openAPISpec)
-	group.Handle("GET", "/healthz", shared.Healthz(stores.System))
+	group.Handle("GET", "/test", shared.Healthz(stores.System))
+	group.Handle("GET", "/cacert.pem", shared.CACert(cfg.TLSCert))
 	group.HandlePath("/", http.HandlerFunc(notFound))
 
 	handler := router.Chain(group.Mux(),
@@ -311,7 +316,8 @@ var routeInventory = []Route{
 	{Method: "POST", Path: "/api/matchcontent", SpecPath: "/api/MatchContent/"},
 	{Method: "GET", Path: "/api/matchcontent/{matchid}", SpecPath: "/api/MatchContent/{matchId}"},
 	{Method: "GET", Path: "/api/matchcontent/{matchid}/file/{hash}", SpecPath: "/api/MatchContent/{matchId}/file/{hash}"},
-	{Method: "GET", Path: "/healthz", SpecPath: "/healthz"},
+	{Method: "GET", Path: "/test", SpecPath: "/test"},
+	{Method: "GET", Path: "/cacert.pem", SpecPath: "/cacert.pem"},
 	// Local Ops addition: the embedded api_spec.yml.
 	{Method: "GET", Path: "/openapi.yml", SpecPath: "/openapi.yml"},
 }

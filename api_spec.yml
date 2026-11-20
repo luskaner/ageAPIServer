@@ -25,7 +25,8 @@ info:
     Implementation endpoints: the Media (`/api/v4/mods/Image/...`) and
     MatchContent (`/api/MatchContent/...`) operations are this server's own
     surface, not a reimplementation of an observed upstream route, and the
-    Ops routes (`/healthz` and `/openapi.yml`) are entirely local as well.
+    Ops routes (`/test`, `/cacert.pem` and `/openapi.yml`) are entirely local
+    as well.
     They are documented so the spec covers every route the server registers.
   contact:
     name: luskaner
@@ -3074,17 +3075,17 @@ paths:
           description: Match content store disabled, file not found or hash mismatch
 
   # Ops: local routes of this server, not part of the upstream service.
-  /healthz:
+  /test:
     get:
       tags:
         - Ops
-      summary: Health probe
+      summary: Liveness probe
       description: |
         Local endpoint of this server; upstream does not have it.
         Pings the database. Answers {"status":"ok"} on success and
         {"status":"unavailable"} with 503 when the database is unreachable.
         Anonymous.
-      operationId: getHealthz
+      operationId: getTest
       security: []
       responses:
         '200':
@@ -3107,6 +3108,32 @@ paths:
                   status:
                     type: string
                     example: unavailable
+
+  /cacert.pem:
+    get:
+      tags:
+        - Ops
+      summary: The certificate this server terminates TLS with
+      description: |
+        Local endpoint of this server; upstream does not have it. Serves the
+        PEM certificate of the HTTPS listener (Server.TLS.Cert, or
+        <folder>/cert.pem) byte for byte, so a client can be made to trust this
+        server. Anonymous.
+
+        With Server.TLS.Mode off or proxy this process does not terminate TLS
+        itself, so it has no certificate of its own to serve and the route
+        answers 404: in proxy mode the pair belongs to the reverse proxy.
+      operationId: getCACert
+      security: []
+      responses:
+        '200':
+          description: The certificate, byte for byte
+          content:
+            application/x-pem-file:
+              schema:
+                type: string
+        '404':
+          description: TLS is not terminated by this process, or the file is gone
 
   /openapi.yml:
     get:

@@ -511,7 +511,7 @@ test 2.1. El spec `api_spec.yml` no se edita.
 - [ ] `routeInventory`:
       `{Method: "GET", Path: "/openapi.yml", SpecPath: "/openapi.yml"}`
       sin `AuthRequired`; alta en `inventoryOnly` del test 2.1.
-- [ ] README: fila "Ops" junto a `/healthz` (anónima; sirve para que
+- [ ] README: fila "Ops" junto a `/test` (anónima; sirve para que
       un integrador genere clientes sin desempaquetar el release).
 
 ### 4.2 · Rate limit en `/api/MatchContent/*` (punto 21)
@@ -582,7 +582,7 @@ nueva (`/openapi.yml`); `go test -race ./...` verde.
       distroless/static, usuario no-root, `VOLUME`/documentación de
       `ageAPIServer.db`, `uploads/`, `resources/config/`.
 - [ ] `compose.yml`: servicio (binario o build), healthcheck sobre
-      `/healthz`, volúmenes persistentes, y el ejemplo de nginx con los
+      `/test`, volúmenes persistentes, y el ejemplo de nginx con los
       `client_max_body_size` por location de 5.1 (**un compose sin eso
       se rompe con el primer mod grande, venga del juego o de la web**).
 - [ ] `docs/systemd-ageapiserver.service`: `EnvironmentFile`

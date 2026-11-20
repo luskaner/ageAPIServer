@@ -3,6 +3,7 @@
 package ageAPIServer
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -168,11 +169,38 @@ func TestUnknownPathIsJSON404(t *testing.T) {
 	}
 }
 
-func TestHealthz(t *testing.T) {
+func TestOpsTestProbe(t *testing.T) {
 	server, _ := newTestServer(t)
-	recorder := do(t, server.Handler(), http.MethodGet, "/healthz", "", nil)
+	recorder := do(t, server.Handler(), http.MethodGet, "/test", "", nil)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("code = %d", recorder.Code)
+	}
+}
+
+func TestCACert(t *testing.T) {
+	// Without a TLS listener of its own the server has no certificate to serve.
+	server, _ := newTestServer(t)
+	recorder := do(t, server.Handler(), http.MethodGet, "/cacert.pem", "", nil)
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("without TLS: code = %d, want 404", recorder.Code)
+	}
+
+	certPath := filepath.Join(t.TempDir(), "cert.pem")
+	cert := []byte("-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n")
+	if err := os.WriteFile(certPath, cert, 0o600); err != nil {
+		t.Fatalf("write cert: %v", err)
+	}
+	tlsServer, err := New(Config{DBPath: filepath.Join(t.TempDir(), "tls.db"), TLSCert: certPath})
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	t.Cleanup(func() { _ = tlsServer.Shutdown(context.Background()) })
+	recorder = do(t, tlsServer.Handler(), http.MethodGet, "/cacert.pem", "", nil)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200", recorder.Code)
+	}
+	if !bytes.Equal(recorder.Body.Bytes(), cert) {
+		t.Fatalf("body = %q", recorder.Body.Bytes())
 	}
 }
 

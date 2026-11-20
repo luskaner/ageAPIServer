@@ -163,6 +163,7 @@ func listenAndServe(ctx context.Context, cfg i.Config, pair cert.Pair) (error, i
 			MaxCount:     cfg.Pagination.MaxCount,
 		},
 		PublicScheme:    cfg.PublicScheme(),
+		TLSCert:         pair.Cert,
 		UploadDir:       cfg.Storage.UploadDir,
 		MaxModFileBytes: cfg.Storage.MaxModFileBytes,
 		MatchContent: ageAPIServer.MatchContentConfig{

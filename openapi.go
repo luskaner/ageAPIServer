@@ -14,7 +14,7 @@ var specYAML []byte
 
 // openAPISpec serves the embedded api_spec.yml. It is a local Ops endpoint:
 // the upstream service never publishes its own spec, and api_spec.yml
-// documents the route (along with /healthz) as an implementation endpoint,
+// documents the route (along with /test and /cacert.pem) as an implementation endpoint,
 // which the inventory test cross-checks like any other.
 func openAPISpec(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/yaml; charset=utf-8")

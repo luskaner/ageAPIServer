@@ -101,7 +101,7 @@ func TestAllRoutesAreRegistered(t *testing.T) {
 				if recorder.Code == http.StatusMethodNotAllowed {
 					t.Fatalf("method not allowed: %s", recorder.Body.String())
 				}
-				if route.Path == "/healthz" || route.Path == "/api/v4/mods/games" ||
+				if route.Path == "/test" || route.Path == "/api/v4/mods/games" ||
 					route.Path == "/api/v4/mods/tags" || route.Path == "/poll/list" {
 					t.Fatalf("unexpected 404: %s", recorder.Body.String())
 				}

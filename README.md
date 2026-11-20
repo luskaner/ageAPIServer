@@ -64,6 +64,10 @@ self-signed one your clients trust:
 ./ageAPIServer --server.addr=:443 --server.tls.mode=on
 ```
 
+With `on`, `GET /cacert.pem` serves that same certificate byte for byte, so a
+client can be pointed at the running server instead of at the file. In `off` and
+`proxy` the process has no certificate of its own and the route answers 404.
+
 Behind an external terminator (nginx, Caddy, a cloud load balancer) keep the
 HTTP listener and set `proxy`. It is `off` plus one statement: a request that
 arrives without TLS and without `X-Forwarded-Proto` still answers `https` links,
@@ -114,7 +118,7 @@ without unpacking the archive.
 | Moderation | `/textmoderation` | required |
 | MatchContent | `/api/MatchContent/`, `/{matchId}` and `/{matchId}/file/{hash}` | anonymous |
 | Media | `/api/v4/mods/image/{name}` | anonymous |
-| Ops (local, not upstream) | `/healthz`, `/openapi.yml` | anonymous |
+| Ops (local, not upstream) | `/test`, `/cacert.pem`, `/openapi.yml` | anonymous |
 
 Authentication is `Authorization: Steam1.0 <token>`, `Authorization: XBL3.0
 x=<puid>;<token>` or the `.AgeOfEmpiresServices` cookie. The AOE3 capture
