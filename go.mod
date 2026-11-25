@@ -12,7 +12,7 @@ require (
 	github.com/knadh/koanf/v2 v2.4.1
 	github.com/spf13/pflag v1.1.0
 	go.yaml.in/yaml/v4 v4.0.0
-	modernc.org/sqlite v1.62.0
+	modernc.org/sqlite v1.63.0
 )
 
 require (
